@@ -1,0 +1,27 @@
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+.venv/
+.python-version
+final_year_project.egg-info/
+htmlcov/
+coverage.json
+.pytest_cache/
+
+# Flutter SDK and binaries
+flutter/
+flutter.tar.xz
+yolov8n.pt
+
+# Flutter app specific (jarvis_app)
+jarvis_app/build/
+jarvis_app/.dart_tool/
+jarvis_app/.flutter-plugins
+jarvis_app/.flutter-plugins-dependencies
+jarvis_app/.packages
+jarvis_app/flutter.log
+
+# OS
+.DS_Store
+.claude/
