@@ -1,0 +1,19 @@
+services:
+  ros2_dev:
+    build: .
+    image: ros2-humble-zsh-custom
+    container_name: ros2_zsh_container
+    network_mode: host
+    pid: host
+    environment:
+      - DISPLAY=${DISPLAY}
+      - QT_X11_NO_MITSHM=1
+    volumes:
+      - /tmp/.X11-unix:/tmp/.X11-unix:rw
+      - ./.zshrc_docker:/root/.zshrc:ro
+      - ~/.zsh_history:/root/.zsh_history:rw
+      # ROS2 Workspace ← ADD THIS
+      - .:/ros2_ws
+    stdin_open: true
+    tty: true
+
