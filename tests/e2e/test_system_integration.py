@@ -12,7 +12,7 @@ from unittest.mock import Mock, MagicMock, patch
 import numpy as np
 
 from pipeline.robot_state import RobotState
-from robot_comms import RobotComms
+from backend.esp32.robot_comms import RobotComms
 from web_server import WebServer
 
 
@@ -339,7 +339,7 @@ class TestComputerVisionModesE2E:
 
         # Test VLA processing
         intent = vla_processor.get_intent(mock_frame)
-        from robot_comms import RobotComms
+        from backend.esp32.robot_comms import RobotComms
         cmd = RobotComms.from_intent(intent)
 
         # Verify intent mapping

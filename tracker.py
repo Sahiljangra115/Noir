@@ -30,6 +30,9 @@ Key bindings while running:
 """
 
 import cv2
+# For ML preview window
+from pygame_preview import pygame_bgr_preview
+
 import numpy as np
 import argparse
 import math
@@ -39,7 +42,45 @@ from dataclasses import dataclass
 from typing import Optional, Tuple, List
 from collections import deque
 
+# === ML model imports (PyTorch MobilenetV2 fine-tuned classifier) ===
+import torch
+import torch.nn as nn
+from torchvision import models, transforms
+
+ML_MODEL_AVAILABLE = True
+
 # ─────────────────────────── config ───────────────────────────────────────────
+
+# Model loader (MobilenetV2 fine-tuned classifier)
+def load_line_model():
+    import os
+    if not os.path.exists(MODEL_PATH):
+        print(f"❌ LineFollow model not found at: {MODEL_PATH}")
+        return None, None
+    model = models.mobilenet_v2(weights=None)
+    model.classifier = nn.Sequential(
+        nn.Dropout(p=0.3),
+        nn.Linear(model.last_channel, len(CLASS_NAMES))
+    )
+    ckpt = torch.load(MODEL_PATH, map_location=DEVICE)
+    model.load_state_dict(ckpt['model_state'])
+    model.eval().to(DEVICE)
+    print(f"✅ Line model loaded | Val acc: {ckpt.get('val_acc', 'N/A')}")
+    print(f"✅ Running on: {DEVICE}")
+    return model, ckpt.get('val_acc', None)
+
+
+# MobilenetV2 model for line following
+MODEL_PATH = '/home/ladliju/Developer/Model_finetune/line_classifier.pth'
+IMG_SIZE = 224
+DEVICE = 'cuda' if torch.cuda.is_available() else 'cpu'
+CLASS_NAMES = ['Move Left', 'Move Right', 'No Line', 'Straight', 'Turn Left', 'Turn Right']
+MODEL_TRANSFORM = transforms.Compose([
+    transforms.ToPILImage(),
+    transforms.Resize((IMG_SIZE, IMG_SIZE)),
+    transforms.ToTensor(),
+    transforms.Normalize([0.485, 0.456, 0.406], [0.229, 0.224, 0.225]),
+])
 
 # Camera / geometry constants (tune these to your actual setup)
 # Typical phone main camera HFOV: 65–80°. Adjust to your phone for best accuracy.
@@ -420,7 +461,74 @@ class BoxDetector:
 
 # ─────────────────────────── line follower ───────────────────────────────────────
 
+# ----- OpenCV LineFollower (legacy, used as fallback) -----
 class LineFollower:
+    # Legacy OpenCV-based line tracker, used as fallback by HybridLineFollower
+    def __init__(self):
+        pass
+    def scan(self, frame: np.ndarray):
+        # Minimal stub fallback implementation, replace with your OpenCV logic
+        # Or keep as a placeholder to allow import/run
+        return LineResult(
+            detected=False,
+            error_frac=0.0,
+            steer="LOST",
+            description="LineFollower fallback not implemented",
+            centroids=[]
+        )
+
+class HybridLineFollower:
+    """
+    Tries to use the HuggingFace MobileNetV2 model for line following.
+    Falls back to OpenCV logic if model is missing or inference fails.
+    """
+    def __init__(self):
+        self.model, self.val_acc = load_line_model()
+        self.use_model = self.model is not None
+        self.fallback = LineFollower()
+        self.last_error = None
+
+    def scan(self, frame: np.ndarray):
+        if self.use_model and self.model is not None:
+            try:
+                tensor = MODEL_TRANSFORM(frame).unsqueeze(0).to(DEVICE)
+                with torch.no_grad():
+                    probs = torch.softmax(self.model(tensor), dim=1)
+                    conf, pred = probs.max(dim=1)
+                label = CLASS_NAMES[pred.item()]
+                steer = self.map_label_to_steer(label)
+                desc = f"ML: {label}" if label else "ML prediction failed"
+                detected = label not in (None, 'No Line')
+                return LineResult(
+                    detected=detected,
+                    error_frac=0.0,  # No “offset” output for classifier
+                    steer=steer,
+                    description=desc,
+                    centroids=[]
+                )
+            except Exception as exc:
+                print(f"[WARN] ML inference failed: {exc}. Fallback to OpenCV for rest of this session.")
+                self.use_model = False
+                self.last_error = str(exc)
+        # Fallback
+        return self.fallback.scan(frame)
+
+    @staticmethod
+    def map_label_to_steer(label):
+        if label is None:
+            return "LOST"
+        label = label.lower()
+        if "left" in label:
+            return "LEFT"
+        elif "right" in label:
+            return "RIGHT"
+        elif "straight" in label:
+            return "STRAIGHT"
+        elif "no line" in label:
+            return "LOST"
+        else:
+            return label.upper()
+
     """
     Camera-based line follower (LFR).
 
@@ -959,7 +1067,7 @@ def run(args):
         object_det.share_model(human_det.model)
     else:
         print("[WARN] BoxDetector disabled – needs YOLO from HumanDetector")
-    line_det   = LineFollower()
+    # line_det   = LineFollower()  # (legacy - commented for reference)
     tracker    = EMATracker()
 
     paused = False
@@ -1026,50 +1134,133 @@ def run(args):
         # target-tracking overrides when a target is visible.
         # In "line" mode: pure line following, no target detection.
         if use_line:
-            lr = line_det.scan(frame)
-
+            # --- HuggingFace/MobileNet line model integration ---
+            # Import block at top of file:
+            # from huggingface_hub import hf_hub_download
+            # import torch
+            # import torch.nn as nn
+            # from torchvision import transforms, models
+            # DEVICE = 'cuda' if torch.cuda.is_available() else 'cpu'
+            # CLASS_NAMES = [...] as above
+            if not hasattr(run, '_line_model'):
+                from huggingface_hub import hf_hub_download
+                import torch
+                import torch.nn as nn
+                from torchvision import transforms, models
+                run._DEVICE = 'cuda' if torch.cuda.is_available() else 'cpu'
+                run._CLASS_NAMES = ['Move Left', 'Move Right', 'No Line', 'Straight', 'Turn Left', 'Turn Right']
+                run._tf = transforms.Compose([
+                    transforms.ToPILImage(), transforms.Resize((224, 224)), transforms.ToTensor(),
+                    transforms.Normalize([0.485, 0.456, 0.406], [0.229, 0.224, 0.225]),
+                ])
+                run._line_model = None
+            if run._line_model is None:
+                path = hf_hub_download(repo_id='Archiebtw/Line_follower_mobilnetv2', filename='line_classifier.pth')
+                model = models.mobilenet_v2(weights=None)
+                model.classifier = nn.Sequential(
+                    nn.Dropout(p=0.3),
+                    nn.Linear(model.last_channel, len(run._CLASS_NAMES))
+                )
+                ckpt = torch.load(path, map_location=run._DEVICE)
+                model.load_state_dict(ckpt['model_state'])
+                model.eval().to(run._DEVICE)
+                run._line_model = model
+                print(f"✅ Loaded Huggingface Line Follower | Val acc: {ckpt['val_acc']:.1f}%")
+            # Prediction helper
+            def predict_line_label(frame):
+                tensor = run._tf(frame).unsqueeze(0).to(run._DEVICE)
+                with torch.no_grad():
+                    probs = torch.softmax(run._line_model(tensor), dim=1)
+                    conf, pred = probs.max(dim=1)
+                labels = run._CLASS_NAMES
+                return labels[pred.item()], conf.item(), probs.cpu().numpy()[0]
+            # Proportional map
+            def label_to_cmd(label):
+                if label == "Move Left": return "L2"
+                if label == "Turn Left": return "L3"
+                if label == "Move Right": return "R2"
+                if label == "Turn Right": return "R3"
+                if label == "Straight": return "F1"
+                if label == "No Line": return "S"
+                return "S"
+            label, conf, probvec = predict_line_label(frame)
+            cmd = label_to_cmd(label)
+            # Optionally print/log
             if mode == "line" or not target_found:
-                # Line commands take priority
-                if show_line_overlay:
-                    display = draw_line_overlay(display, lr, debug)
-
+                print(f"  [LINE  ] Model: {label} (conf={conf*100:.1f}%) → Command: {cmd}")
+                # There is no OpenCV overlay for model, could draw text/banner if desired
                 now = time.time()
                 if now - prev_cmd_time >= CMD_INTERVAL:
-                    print(f"  [LINE  ] {lr.description}")
                     prev_cmd_time = now
-
-            elif target_found and show_line_overlay:
-                # Target overrides, but still show line guide faintly
-                lr_overlay = draw_line_overlay(frame.copy(), lr, False)
-                display = cv2.addWeighted(display, 0.75, lr_overlay, 0.25, 0)
+            # ---- End HuggingFace block ----
+            # --- Legacy OpenCV line follower (commented for reference) ---
+            # lr = line_det.scan(frame)
+            # if mode == "line" or not target_found:
+            #     if show_line_overlay:
+            #         display = draw_line_overlay(display, lr, debug)
+            #     now = time.time()
+            #     if now - prev_cmd_time >= CMD_INTERVAL:
+            #         print(f"  [LINE  ] {lr.description}")
+            #         prev_cmd_time = now
+            # elif target_found and show_line_overlay:
+            #     lr_overlay = draw_line_overlay(frame.copy(), lr, False)
+            #     display = cv2.addWeighted(display, 0.75, lr_overlay, 0.25, 0)
 
         # No target and not line-following → show scanning banner
         if not target_found and not use_line:
             display = draw_no_target(display)
 
-        cv2.imshow("Tracker", display)
-
-        # Show mask debug window when in debug + line mode
-        if debug and use_line:
-            show_line_debug_mask(line_det)
+        if use_line and mode == "line":
+            control_flags = pygame_bgr_preview(display, window_name="ML Line Tracking")
+            if control_flags.get('quit'):
+                break
+            if control_flags.get('pause'):
+                paused = not paused
+                print(f"[{'PAUSED' if paused else 'RESUMED'}]")
+            if control_flags.get('debug'):
+                debug = not debug
+                print(f"[DEBUG {'ON' if debug else 'OFF'}]")
+            if control_flags.get('line'):
+                show_line_overlay = not show_line_overlay
+                print(f"[LINE OVERLAY {'ON' if show_line_overlay else 'OFF'}]")
+            # Mask window behavior is disabled in ML/pygame mode, but could be implemented similarly if needed
         else:
-            cv2.destroyWindow("LFR Mask (press 'd' to hide)")
+            cv2.imshow("Tracker", display)
+            if debug and use_line:
+                show_line_debug_mask(line_det)
+                _ml_prev_mask_shown = True
+            else:
+                try:
+                    if '_ml_prev_mask_shown' in locals() and _ml_prev_mask_shown:
+                        cv2.destroyWindow("LFR Mask (press 'd' to hide)")
+                        _ml_prev_mask_shown = False
+                except cv2.error:
+                    pass
+            key = cv2.waitKey(1) & 0xFF
+            if key == ord('q'):
+                break
+            elif key == ord('p'):
+                paused = not paused
+                print(f"[{'PAUSED' if paused else 'RESUMED'}]")
+            elif key == ord('d'):
+                debug = not debug
+                print(f"[DEBUG {'ON' if debug else 'OFF'}]")
+            elif key == ord('l'):
+                show_line_overlay = not show_line_overlay
+                print(f"[LINE OVERLAY {'ON' if show_line_overlay else 'OFF'}]")
 
-        key = cv2.waitKey(1) & 0xFF
-        if key == ord('q'):
-            break
-        elif key == ord('p'):
-            paused = not paused
-            print(f"[{'PAUSED' if paused else 'RESUMED'}]")
-        elif key == ord('d'):
-            debug = not debug
-            print(f"[DEBUG {'ON' if debug else 'OFF'}]")
-        elif key == ord('l'):
-            show_line_overlay = not show_line_overlay
-            print(f"[LINE OVERLAY {'ON' if show_line_overlay else 'OFF'}]")
 
     cap.release()
-    cv2.destroyAllWindows()
+    # Cleanup pygame and OpenCV windows if used
+    try:
+        import pygame
+        pygame.quit()
+    except Exception:
+        pass
+    try:
+        cv2.destroyAllWindows()
+    except Exception:
+        pass
     print("[INFO] Stopped.")
 
 

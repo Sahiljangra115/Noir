@@ -1,0 +1,165 @@
+<h2>Advanced Particle Arc Reactor</h2>
+<p class="subtitle">Cloud-based spherical particle system (inspired by Evergine)</p>
+
+<div class="mockup">
+  <div class="mockup-header">JARVIS v1.0.0 - Particle Simulation</div>
+  <div class="mockup-body" style="background: #030507; color: #fff; padding: 0; font-family: sans-serif; height: 500px; display: flex; flex-direction: column; position: relative; overflow: hidden;">
+    
+    <!-- Top Bar -->
+    <div style="display: flex; justify-content: space-between; align-items: center; padding: 15px 20px; background: rgba(255,255,255,0.02); border-bottom: 1px solid rgba(255,255,255,0.05);">
+      <div style="display: flex; align-items: center; gap: 15px;">
+        <div style="font-size: 18px; color: #888;">☰</div>
+        <div style="font-weight: bold; letter-spacing: 2px; font-size: 14px;">H O M E</div>
+      </div>
+      <div style="display: flex; gap: 8px; align-items: center;">
+        <div style="width: 8px; height: 8px; border-radius: 50%; background: #00E5FF; box-shadow: 0 0 8px #00E5FF;"></div>
+        <span style="font-size: 10px; color: #00E5FF; letter-spacing: 1px;">LINKED</span>
+      </div>
+    </div>
+
+    <!-- Main Visualizer (3D Particle Cloud) -->
+    <div style="flex: 1; display: flex; justify-content: center; align-items: center; position: relative;">
+      <div class="particle-system">
+        <div class="particle-cloud">
+          <!-- Many small particles -->
+          <div class="p p-1"></div><div class="p p-2"></div><div class="p p-3"></div><div class="p p-4"></div>
+          <div class="p p-5"></div><div class="p p-6"></div><div class="p p-7"></div><div class="p p-8"></div>
+          <div class="p p-9"></div><div class="p p-10"></div><div class="p p-11"></div><div class="p p-12"></div>
+          <div class="p p-13"></div><div class="p p-14"></div><div class="p p-15"></div><div class="p p-16"></div>
+          <div class="p p-17"></div><div class="p p-18"></div><div class="p p-19"></div><div class="p p-20"></div>
+          <div class="p p-21"></div><div class="p p-22"></div><div class="p p-23"></div><div class="p p-24"></div>
+        </div>
+        <div class="inner-glow"></div>
+      </div>
+      <div style="position: absolute; bottom: 20px; text-align: center; width: 100%;">
+        <p style="font-size: 10px; color: #00E5FF44; letter-spacing: 3px;">QUANTUM CORE STABLE</p>
+      </div>
+    </div>
+
+    <!-- Bottom Data Panel -->
+    <div style="padding: 0 20px 20px 20px;">
+      <div style="background: rgba(255,255,255,0.03); border-radius: 20px; border: 1px solid rgba(255,255,255,0.08); padding: 18px; backdrop-filter: blur(10px);">
+        <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 15px;">
+           <span style="font-size: 9px; color: rgba(255,255,255,0.3); letter-spacing: 2px;">TELEMETRY</span>
+           <span style="font-size: 9px; color: #00E5FF; letter-spacing: 2px;">98% STABLE</span>
+        </div>
+        <div style="display: flex; gap: 20px;">
+           <div style="flex: 1;">
+             <p style="font-size: 11px; color: #888; margin: 0 0 4px 0;">IMU VECTOR</p>
+             <p style="font-size: 13px; color: #fff; margin: 0; font-family: monospace;">0.1, -9.8, 0.4</p>
+           </div>
+           <div style="flex: 1;">
+             <p style="font-size: 11px; color: #888; margin: 0 0 4px 0;">COORDINATES</p>
+             <p style="font-size: 13px; color: #fff; margin: 0; font-family: monospace;">51.50, -0.12</p>
+           </div>
+        </div>
+      </div>
+    </div>
+
+    <!-- Navigation Bar -->
+    <div style="height: 65px; background: rgba(255,255,255,0.03); border-top: 1px solid rgba(255,255,255,0.1); display: flex; align-items: center; justify-content: space-around; padding-bottom: 5px;">
+      <div style="display: flex; flex-direction: column; align-items: center; color: #00E5FF;">
+        <div style="font-size: 20px;">◈</div>
+        <span style="font-size: 9px; margin-top: 4px; letter-spacing: 1px;">HOME</span>
+      </div>
+      <div style="display: flex; flex-direction: column; align-items: center; color: #666;">
+        <div style="font-size: 20px;">▣</div>
+        <span style="font-size: 9px; margin-top: 4px; letter-spacing: 1px;">CONTROL</span>
+      </div>
+      <div style="display: flex; flex-direction: column; align-items: center; color: #666;">
+        <div style="font-size: 20px;">⌇</div>
+        <span style="font-size: 9px; margin-top: 4px; letter-spacing: 1px;">VISION</span>
+      </div>
+      <div style="display: flex; flex-direction: column; align-items: center; color: #666;">
+        <div style="font-size: 20px;">⚙</div>
+        <span style="font-size: 9px; margin-top: 4px; letter-spacing: 1px;">SETTINGS</span>
+      </div>
+    </div>
+  </div>
+</div>
+
+<style>
+.particle-system {
+  position: relative;
+  width: 200px;
+  height: 200px;
+  display: flex;
+  justify-content: center;
+  align-items: center;
+  perspective: 1000px;
+}
+.inner-glow {
+  position: absolute;
+  width: 40px;
+  height: 40px;
+  background: #00E5FF;
+  border-radius: 50%;
+  filter: blur(15px);
+  opacity: 0.3;
+  animation: pulse 3s infinite ease-in-out;
+}
+.particle-cloud {
+  position: relative;
+  width: 150px;
+  height: 150px;
+  transform-style: preserve-3d;
+  animation: rotate3d 10s infinite linear;
+}
+.p {
+  position: absolute;
+  width: 2px;
+  height: 2px;
+  background: #00E5FF;
+  border-radius: 50%;
+  box-shadow: 0 0 3px #00E5FF;
+}
+
+/* Procedurally distribute particles in a "spherical" manner using CSS transforms */
+.p-1 { transform: rotateY(0deg) rotateX(10deg) translateZ(60px); opacity: 0.8; }
+.p-2 { transform: rotateY(45deg) rotateX(20deg) translateZ(60px); opacity: 0.6; }
+.p-3 { transform: rotateY(90deg) rotateX(30deg) translateZ(60px); opacity: 0.9; }
+.p-4 { transform: rotateY(135deg) rotateX(40deg) translateZ(60px); opacity: 0.7; }
+.p-5 { transform: rotateY(180deg) rotateX(50deg) translateZ(60px); opacity: 0.5; }
+.p-6 { transform: rotateY(225deg) rotateX(60deg) translateZ(60px); opacity: 0.8; }
+.p-7 { transform: rotateY(270deg) rotateX(70deg) translateZ(60px); opacity: 0.4; }
+.p-8 { transform: rotateY(315deg) rotateX(80deg) translateZ(60px); opacity: 0.9; }
+.p-9 { transform: rotateY(20deg) rotateX(100deg) translateZ(55px); opacity: 0.6; }
+.p-10 { transform: rotateY(60deg) rotateX(110deg) translateZ(55px); opacity: 0.7; }
+.p-11 { transform: rotateY(110deg) rotateX(120deg) translateZ(55px); opacity: 0.8; }
+.p-12 { transform: rotateY(160deg) rotateX(130deg) translateZ(55px); opacity: 0.5; }
+.p-13 { transform: rotateY(210deg) rotateX(140deg) translateZ(55px); opacity: 0.9; }
+.p-14 { transform: rotateY(260deg) rotateX(150deg) translateZ(55px); opacity: 0.4; }
+.p-15 { transform: rotateY(310deg) rotateX(160deg) translateZ(55px); opacity: 0.6; }
+.p-16 { transform: rotateY(40deg) rotateX(170deg) translateZ(55px); opacity: 0.8; }
+.p-17 { transform: rotateY(15deg) rotateX(-20deg) translateZ(65px); animation: flicker 1s infinite alternate; }
+.p-18 { transform: rotateY(105deg) rotateX(-40deg) translateZ(65px); animation: flicker 1.2s infinite alternate; }
+.p-19 { transform: rotateY(195deg) rotateX(-60deg) translateZ(65px); animation: flicker 0.8s infinite alternate; }
+.p-20 { transform: rotateY(285deg) rotateX(-80deg) translateZ(65px); animation: flicker 1.5s infinite alternate; }
+.p-21 { transform: rotateY(55deg) rotateX(-100deg) translateZ(65px); }
+.p-22 { transform: rotateY(145deg) rotateX(-120deg) translateZ(65px); }
+.p-23 { transform: rotateY(235deg) rotateX(-140deg) translateZ(65px); }
+.p-24 { transform: rotateY(325deg) rotateX(-160deg) translateZ(65px); }
+
+@keyframes rotate3d {
+  from { transform: rotateX(0deg) rotateY(0deg); }
+  to { transform: rotateX(360deg) rotateY(360deg); }
+}
+@keyframes pulse {
+  0%, 100% { transform: scale(0.8); opacity: 0.2; }
+  50% { transform: scale(1.3); opacity: 0.5; }
+}
+@keyframes flicker {
+  0% { opacity: 0.2; }
+  100% { opacity: 1; }
+}
+</style>
+
+<div class="options">
+  <div class="option" data-choice="accept" onclick="toggleSelect(this)">
+    <div class="letter">✓</div>
+    <div class="content">
+      <h3>Design Approved</h3>
+      <p>This particle cloud animation is exactly what I wanted.</p>
+    </div>
+  </div>
+</div>

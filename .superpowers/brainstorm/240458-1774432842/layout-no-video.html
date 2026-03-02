@@ -1,0 +1,68 @@
+<h2>Proposed App Layout (No Video)</h2>
+<p class="subtitle">Focusing on Voice, Telemetry, and Control</p>
+
+<div class="mockup">
+  <div class="mockup-header">JARVIS Mobile Interface</div>
+  <div class="mockup-body" style="background: #030507; color: #fff; padding: 20px; font-family: sans-serif; height: 400px; display: flex; flex-direction: column;">
+    
+    <!-- Header/Status -->
+    <div style="display: flex; justify-content: space-between; align-items: center; border-bottom: 1px solid #1a1a1a; padding-bottom: 10px; margin-bottom: 15px;">
+      <div style="font-weight: bold; letter-spacing: 2px;">J A R V I S</div>
+      <div style="display: flex; gap: 10px; align-items: center;">
+        <div style="width: 10px; height: 10px; border-radius: 50%; background: #00E5FF; box-shadow: 0 0 5px #00E5FF;"></div>
+        <span style="font-size: 10px; color: #888;">CORE ONLINE</span>
+      </div>
+    </div>
+
+    <!-- Main Visualizer (Arc Reactor) -->
+    <div style="flex: 2; display: flex; justify-content: center; align-items: center; position: relative;">
+      <div style="width: 150px; height: 150px; border: 2px solid #00E5FF33; border-radius: 50%; display: flex; justify-content: center; align-items: center;">
+         <div style="width: 120px; height: 120px; border: 1px solid #00E5FF66; border-radius: 50%; display: flex; justify-content: center; align-items: center; animation: pulse 2s infinite;">
+            <div style="width: 40px; height: 40px; background: #00E5FF; border-radius: 50%; box-shadow: 0 0 20px #00E5FF;"></div>
+         </div>
+      </div>
+      <div style="position: absolute; bottom: 0; text-align: center; width: 100%;">
+        <p style="font-size: 12px; color: #00E5FF; letter-spacing: 1px; margin-top: 10px;">LISTENING...</p>
+      </div>
+    </div>
+
+    <!-- Conversation Log -->
+    <div style="flex: 1.5; background: rgba(255,255,255,0.03); border-radius: 12px; border: 1px solid rgba(255,255,255,0.05); padding: 15px; margin: 15px 0; display: flex; flex-direction: column; justify-content: center;">
+      <p style="color: rgba(255,255,255,0.4); font-size: 8px; letter-spacing: 2px; margin: 0 0 5px 0;">TRANSCRIPT</p>
+      <p style="font-style: italic; color: rgba(255,255,255,0.8); margin: 0 0 10px 0; font-size: 14px;">"Jarvis, move forward 2 meters."</p>
+      <p style="color: #00E5FF99; font-size: 8px; letter-spacing: 2px; margin: 0 0 5px 0;">RESPONSE</p>
+      <p style="margin: 0; font-size: 14px;">"Executing forward movement for 2 meters."</p>
+    </div>
+
+    <!-- Control & Telemetry Row -->
+    <div style="display: flex; gap: 15px; height: 80px;">
+       <div style="flex: 1; background: rgba(255,255,255,0.03); border-radius: 12px; padding: 10px; display: flex; flex-direction: column; justify-content: center;">
+         <p style="color: rgba(255,255,255,0.3); font-size: 8px; letter-spacing: 1px; margin: 0 0 5px 0;">TELEMETRY</p>
+         <p style="font-size: 10px; color: #ccc; margin: 0;">IMU: 0.1, -9.8, 0.4</p>
+         <p style="font-size: 10px; color: #ccc; margin: 0;">GPS: 51.5, -0.1</p>
+       </div>
+       <div style="flex: 1; background: rgba(255,255,255,0.03); border-radius: 12px; padding: 10px; display: flex; flex-direction: column; justify-content: center; align-items: center;">
+         <p style="color: rgba(255,255,255,0.3); font-size: 8px; letter-spacing: 1px; margin: 0 0 5px 0;">MODE</p>
+         <div style="color: #00E5FF; font-size: 12px; font-weight: bold;">HUMAN_TRACK</div>
+       </div>
+    </div>
+  </div>
+</div>
+
+<div class="options" data-multiselect>
+  <div class="option" data-choice="accept" onclick="toggleSelect(this)">
+    <div class="letter">✓</div>
+    <div class="content">
+      <h3>This looks good</h3>
+      <p>Proceed with the design as shown (no video streaming).</p>
+    </div>
+  </div>
+</div>
+
+<style>
+@keyframes pulse {
+  0% { transform: scale(0.95); opacity: 0.8; }
+  50% { transform: scale(1.05); opacity: 1; }
+  100% { transform: scale(0.95); opacity: 0.8; }
+}
+</style>

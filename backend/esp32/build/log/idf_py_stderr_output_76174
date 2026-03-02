@@ -1,0 +1,133 @@
+Command: cmake -G Ninja -B /home/ladliju/Developer/Final year project/backend/esp32/build -DPYTHON_DEPS_CHECKED=1 -DPYTHON=/home/ladliju/.espressif/python_env/idf6.1_py3.14_env/bin/python -DESP_PLATFORM=1 -DCCACHE_ENABLE=False /home/ladliju/Developer/Final year project/backend/esp32
+CMake Deprecation Warning at CMakeLists.txt:1 (cmake_minimum_required):
+  Compatibility with CMake < 3.10 will be removed from a future version of
+  CMake.
+
+  Update the VERSION argument <min> value.  Or, use the <min>...<max> syntax
+  to tell CMake that the project requires at least <min> but has been updated
+  to work with policies introduced by <max> or earlier.
+
+
+Submodule 'components/bootloader/subproject/components/micro-ecc/micro-ecc' (https://github.com/kmackay/micro-ecc.git) registered for path 'components/bootloader/subproject/components/micro-ecc/micro-ecc'
+Cloning into '/home/ladliju/esp-idf/components/bootloader/subproject/components/micro-ecc/micro-ecc'...
+Submodule 'components/bt/controller/lib_esp32' (https://github.com/espressif/esp32-bt-lib.git) registered for path 'components/bt/controller/lib_esp32'
+Cloning into '/home/ladliju/esp-idf/components/bt/controller/lib_esp32'...
+From https://github.com/espressif/esp32-bt-lib
+ * branch            a7a567dfb437105195bd23e7365fe8f6ec64ca79 -> FETCH_HEAD
+Submodule 'components/bt/controller/lib_esp32c2/esp32c2-bt-lib' (https://github.com/espressif/esp32c2-bt-lib.git) registered for path 'components/bt/controller/lib_esp32c2/esp32c2-bt-lib'
+Cloning into '/home/ladliju/esp-idf/components/bt/controller/lib_esp32c2/esp32c2-bt-lib'...
+Submodule 'components/bt/controller/lib_esp32c3_family' (https://github.com/espressif/esp32c3-bt-lib.git) registered for path 'components/bt/controller/lib_esp32c3_family'
+Cloning into '/home/ladliju/esp-idf/components/bt/controller/lib_esp32c3_family'...
+Submodule 'components/bt/controller/lib_esp32c5/esp32c5-bt-lib' (https://github.com/espressif/esp32c5-bt-lib.git) registered for path 'components/bt/controller/lib_esp32c5/esp32c5-bt-lib'
+Cloning into '/home/ladliju/esp-idf/components/bt/controller/lib_esp32c5/esp32c5-bt-lib'...
+Submodule 'components/bt/controller/lib_esp32c6/esp32c6-bt-lib' (https://github.com/espressif/esp32c6-bt-lib.git) registered for path 'components/bt/controller/lib_esp32c6/esp32c6-bt-lib'
+Cloning into '/home/ladliju/esp-idf/components/bt/controller/lib_esp32c6/esp32c6-bt-lib'...
+Submodule 'components/bt/controller/lib_esp32h2/esp32h2-bt-lib' (https://github.com/espressif/esp32h2-bt-lib.git) registered for path 'components/bt/controller/lib_esp32h2/esp32h2-bt-lib'
+Cloning into '/home/ladliju/esp-idf/components/bt/controller/lib_esp32h2/esp32h2-bt-lib'...
+Submodule 'components/bt/esp_ble_mesh/lib/lib' (https://github.com/espressif/esp-ble-mesh-lib.git) registered for path 'components/bt/esp_ble_mesh/lib/lib'
+Cloning into '/home/ladliju/esp-idf/components/bt/esp_ble_mesh/lib/lib'...
+Submodule 'components/bt/host/nimble/nimble' (https://github.com/espressif/esp-nimble.git) registered for path 'components/bt/host/nimble/nimble'
+Cloning into '/home/ladliju/esp-idf/components/bt/host/nimble/nimble'...
+Submodule 'components/cmock/CMock' (https://github.com/ThrowTheSwitch/CMock.git) registered for path 'components/cmock/CMock'
+Cloning into '/home/ladliju/esp-idf/components/cmock/CMock'...
+Submodule 'vendor/c_exception' (https://github.com/throwtheswitch/cexception.git) registered for path 'components/cmock/CMock/vendor/c_exception'
+Submodule 'vendor/unity' (https://github.com/throwtheswitch/unity.git) registered for path 'components/cmock/CMock/vendor/unity'
+Cloning into '/home/ladliju/esp-idf/components/cmock/CMock/vendor/c_exception'...
+Cloning into '/home/ladliju/esp-idf/components/cmock/CMock/vendor/unity'...
+Submodule 'components/esp_coex/lib' (https://github.com/espressif/esp-coex-lib.git) registered for path 'components/esp_coex/lib'
+Cloning into '/home/ladliju/esp-idf/components/esp_coex/lib'...
+Submodule 'components/esp_phy/lib' (https://github.com/espressif/esp-phy-lib.git) registered for path 'components/esp_phy/lib'
+Cloning into '/home/ladliju/esp-idf/components/esp_phy/lib'...
+Submodule 'components/esp_wifi/lib' (https://github.com/espressif/esp32-wifi-lib.git) registered for path 'components/esp_wifi/lib'
+Cloning into '/home/ladliju/esp-idf/components/esp_wifi/lib'...
+From https://github.com/espressif/esp32-wifi-lib
+ * branch              afcedfaba19b07c01ee71d02139c7d0b40ea572f -> FETCH_HEAD
+Submodule 'components/heap/tlsf' (https://github.com/espressif/tlsf.git) registered for path 'components/heap/tlsf'
+Cloning into '/home/ladliju/esp-idf/components/heap/tlsf'...
+Submodule 'components/lwip/lwip' (https://github.com/espressif/esp-lwip.git) registered for path 'components/lwip/lwip'
+Cloning into '/home/ladliju/esp-idf/components/lwip/lwip'...
+Submodule 'components/mbedtls/mbedtls' (https://github.com/espressif/mbedtls.git) registered for path 'components/mbedtls/mbedtls'
+Cloning into '/home/ladliju/esp-idf/components/mbedtls/mbedtls'...
+Submodule 'components/openthread/lib' (https://github.com/espressif/esp-thread-lib.git) registered for path 'components/openthread/lib'
+Cloning into '/home/ladliju/esp-idf/components/openthread/lib'...
+From https://github.com/espressif/esp-thread-lib
+ * branch            28a452bc4d613354761a4a5912769798f070af75 -> FETCH_HEAD
+Submodule 'components/openthread/openthread' (https://github.com/espressif/openthread.git) registered for path 'components/openthread/openthread'
+Cloning into '/home/ladliju/esp-idf/components/openthread/openthread'...
+Submodule 'third_party/mbedtls/repo' (https://github.com/Mbed-TLS/mbedtls.git) registered for path 'components/openthread/openthread/third_party/mbedtls/repo'
+Cloning into '/home/ladliju/esp-idf/components/openthread/openthread/third_party/mbedtls/repo'...
+Submodule 'framework' (https://github.com/Mbed-TLS/mbedtls-framework) registered for path 'components/openthread/openthread/third_party/mbedtls/repo/framework'
+Cloning into '/home/ladliju/esp-idf/components/openthread/openthread/third_party/mbedtls/repo/framework'...
+Submodule 'components/protobuf-c/protobuf-c' (https://github.com/protobuf-c/protobuf-c.git) registered for path 'components/protobuf-c/protobuf-c'
+Cloning into '/home/ladliju/esp-idf/components/protobuf-c/protobuf-c'...
+Submodule 'components/spiffs/spiffs' (https://github.com/pellepl/spiffs.git) registered for path 'components/spiffs/spiffs'
+Cloning into '/home/ladliju/esp-idf/components/spiffs/spiffs'...
+Submodule 'components/unity/unity' (https://github.com/ThrowTheSwitch/Unity.git) registered for path 'components/unity/unity'
+Cloning into '/home/ladliju/esp-idf/components/unity/unity'...
+Configuration Report               
+ ───────────────────────────────── 
+   Parser Version: 1               
+   Verbosity: default              
+   Defaults policy: sdkconfig      
+   Status: Finished successfully   
+                                   
+ ───────────────────────────────── 
+CMake Warning at /home/ladliju/esp-idf/tools/cmake/component_validation.cmake:106 (message):
+  Private include directory
+  '/home/ladliju/esp-idf/components/esp_wifi/wifi_apps/roaming_app/include'
+  belongs to component esp_wifi but is being used by component
+  wpa_supplicant.  It is recommended to define the component dependency for
+  wpa_supplicant on the component esp_wifi, i.e.  'idf_component_register(...
+  PRIV_REQUIRES esp_wifi)' in the CMakeLists.txt of wpa_supplicant, and
+  specify the included directory as idf_component_register(...
+  PRIV_INCLUDE_DIRS <dir relative to component>) in the CMakeLists.txt of
+  component esp_wifi.
+Call Stack (most recent call first):
+  /home/ladliju/esp-idf/tools/cmake/component_validation.cmake:130 (__component_validation_check_include_dirs)
+  /home/ladliju/esp-idf/CMakeLists.txt:353 (__component_validation_run_checks)
+
+
+CMake Warning at /home/ladliju/esp-idf/tools/cmake/component_validation.cmake:106 (message):
+  Private include directory
+  '/home/ladliju/esp-idf/components/esp_wifi/wifi_apps/roaming_app/src'
+  belongs to component esp_wifi but is being used by component
+  wpa_supplicant.  It is recommended to define the component dependency for
+  wpa_supplicant on the component esp_wifi, i.e.  'idf_component_register(...
+  PRIV_REQUIRES esp_wifi)' in the CMakeLists.txt of wpa_supplicant, and
+  specify the included directory as idf_component_register(...
+  PRIV_INCLUDE_DIRS <dir relative to component>) in the CMakeLists.txt of
+  component esp_wifi.
+Call Stack (most recent call first):
+  /home/ladliju/esp-idf/tools/cmake/component_validation.cmake:130 (__component_validation_check_include_dirs)
+  /home/ladliju/esp-idf/CMakeLists.txt:353 (__component_validation_run_checks)
+
+
+CMake Warning at /home/ladliju/esp-idf/tools/cmake/component_validation.cmake:106 (message):
+  Private include directory
+  '/home/ladliju/esp-idf/components/wpa_supplicant/src' belongs to component
+  wpa_supplicant but is being used by component esp_wifi.  It is recommended
+  to define the component dependency for esp_wifi on the component
+  wpa_supplicant, i.e.  'idf_component_register(...  PRIV_REQUIRES
+  wpa_supplicant)' in the CMakeLists.txt of esp_wifi, and specify the
+  included directory as idf_component_register(...  PRIV_INCLUDE_DIRS <dir
+  relative to component>) in the CMakeLists.txt of component wpa_supplicant.
+Call Stack (most recent call first):
+  /home/ladliju/esp-idf/tools/cmake/component_validation.cmake:130 (__component_validation_check_include_dirs)
+  /home/ladliju/esp-idf/CMakeLists.txt:353 (__component_validation_run_checks)
+
+
+CMake Warning at /home/ladliju/esp-idf/tools/cmake/component_validation.cmake:106 (message):
+  Private include directory
+  '/home/ladliju/esp-idf/components/wpa_supplicant/esp_supplicant/src'
+  belongs to component wpa_supplicant but is being used by component
+  esp_wifi.  It is recommended to define the component dependency for
+  esp_wifi on the component wpa_supplicant, i.e.  'idf_component_register(...
+  PRIV_REQUIRES wpa_supplicant)' in the CMakeLists.txt of esp_wifi, and
+  specify the included directory as idf_component_register(...
+  PRIV_INCLUDE_DIRS <dir relative to component>) in the CMakeLists.txt of
+  component wpa_supplicant.
+Call Stack (most recent call first):
+  /home/ladliju/esp-idf/tools/cmake/component_validation.cmake:130 (__component_validation_check_include_dirs)
+  /home/ladliju/esp-idf/CMakeLists.txt:353 (__component_validation_run_checks)
+
+

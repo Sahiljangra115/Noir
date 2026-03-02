@@ -3,7 +3,7 @@ Unit tests for RobotComms functionality.
 """
 import pytest
 from unittest.mock import Mock, patch, MagicMock
-from robot_comms import RobotComms
+from backend.esp32.robot_comms import RobotComms
 
 
 class TestRobotComms:

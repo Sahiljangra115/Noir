@@ -11,7 +11,7 @@ import numpy as np
 import queue
 
 from pipeline.robot_state import RobotState
-from robot_comms import RobotComms
+from backend.esp32.robot_comms import RobotComms
 
 
 @pytest.mark.e2e

@@ -1,0 +1,10 @@
+Command: ninja flash
+
+A fatal error occurred: This chip is ESP8266, not ESP32. Wrong chip argument?
+[31mCMake Error at /home/ladliju/esp-idf/components/esptool_py/run_serial_tool.cmake:67 (message):
+  
+  /home/ladliju/.espressif/python_env/idf6.1_py3.14_env/bin/python;-m;esptool;--chip;esp32
+  failed.
+
+
+[0m

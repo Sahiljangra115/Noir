@@ -1,0 +1,131 @@
+<h2>Refined JARVIS App Design</h2>
+<p class="subtitle">Particle-based Arc Reactor & Navigation Drawer/Bar</p>
+
+<div class="mockup">
+  <div class="mockup-header">JARVIS v1.0.0</div>
+  <div class="mockup-body" style="background: #030507; color: #fff; padding: 0; font-family: sans-serif; height: 500px; display: flex; flex-direction: column; position: relative; overflow: hidden;">
+    
+    <!-- Top Bar -->
+    <div style="display: flex; justify-content: space-between; align-items: center; padding: 15px 20px; background: rgba(255,255,255,0.02); border-bottom: 1px solid rgba(255,255,255,0.05);">
+      <div style="display: flex; align-items: center; gap: 15px;">
+        <div style="font-size: 18px; color: #888;">☰</div>
+        <div style="font-weight: bold; letter-spacing: 2px; font-size: 14px;">H O M E</div>
+      </div>
+      <div style="display: flex; gap: 8px; align-items: center;">
+        <div style="width: 8px; height: 8px; border-radius: 50%; background: #00E5FF; box-shadow: 0 0 8px #00E5FF;"></div>
+        <span style="font-size: 10px; color: #00E5FF; letter-spacing: 1px;">LINKED</span>
+      </div>
+    </div>
+
+    <!-- Main Visualizer (Particle Ball) -->
+    <div style="flex: 1; display: flex; justify-content: center; align-items: center; position: relative;">
+      <div class="particle-orb">
+        <div class="particle p1"></div><div class="particle p2"></div><div class="particle p3"></div>
+        <div class="particle p4"></div><div class="particle p5"></div><div class="particle p6"></div>
+        <div class="particle p7"></div><div class="particle p8"></div><div class="particle p9"></div>
+        <div class="core-glow"></div>
+      </div>
+      <div style="position: absolute; bottom: 20px; text-align: center; width: 100%;">
+        <p style="font-size: 10px; color: #00E5FF66; letter-spacing: 3px;">SYSTEM MONITORING ACTIVE</p>
+      </div>
+    </div>
+
+    <!-- Bottom Data Panel (Floating Card) -->
+    <div style="padding: 0 20px 20px 20px;">
+      <div style="background: rgba(255,255,255,0.03); border-radius: 20px; border: 1px solid rgba(255,255,255,0.08); padding: 18px; backdrop-filter: blur(10px);">
+        <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 15px;">
+           <span style="font-size: 9px; color: rgba(255,255,255,0.3); letter-spacing: 2px;">TELEMETRY</span>
+           <span style="font-size: 9px; color: #00E5FF; letter-spacing: 2px;">98% STABLE</span>
+        </div>
+        <div style="display: flex; gap: 20px;">
+           <div style="flex: 1;">
+             <p style="font-size: 11px; color: #888; margin: 0 0 4px 0;">IMU VECTOR</p>
+             <p style="font-size: 13px; color: #fff; margin: 0; font-family: monospace;">0.1, -9.8, 0.4</p>
+           </div>
+           <div style="flex: 1;">
+             <p style="font-size: 11px; color: #888; margin: 0 0 4px 0;">COORDINATES</p>
+             <p style="font-size: 13px; color: #fff; margin: 0; font-family: monospace;">51.50, -0.12</p>
+           </div>
+        </div>
+      </div>
+    </div>
+
+    <!-- Bottom Navigation Bar -->
+    <div style="height: 65px; background: rgba(255,255,255,0.03); border-top: 1px solid rgba(255,255,255,0.1); display: flex; align-items: center; justify-content: space-around; padding-bottom: 5px;">
+      <div style="display: flex; flex-direction: column; align-items: center; color: #00E5FF;">
+        <div style="font-size: 20px;">◈</div>
+        <span style="font-size: 9px; margin-top: 4px; letter-spacing: 1px;">HOME</span>
+      </div>
+      <div style="display: flex; flex-direction: column; align-items: center; color: #666;">
+        <div style="font-size: 20px;">▣</div>
+        <span style="font-size: 9px; margin-top: 4px; letter-spacing: 1px;">CONTROL</span>
+      </div>
+      <div style="display: flex; flex-direction: column; align-items: center; color: #666;">
+        <div style="font-size: 20px;">⌇</div>
+        <span style="font-size: 9px; margin-top: 4px; letter-spacing: 1px;">VISION</span>
+      </div>
+      <div style="display: flex; flex-direction: column; align-items: center; color: #666;">
+        <div style="font-size: 20px;">⚙</div>
+        <span style="font-size: 9px; margin-top: 4px; letter-spacing: 1px;">SETTINGS</span>
+      </div>
+    </div>
+  </div>
+</div>
+
+<style>
+.particle-orb {
+  position: relative;
+  width: 180px;
+  height: 180px;
+  border-radius: 50%;
+  display: flex;
+  justify-content: center;
+  align-items: center;
+}
+.core-glow {
+  width: 60px;
+  height: 60px;
+  background: radial-gradient(circle, #00E5FF 0%, transparent 70%);
+  border-radius: 50%;
+  filter: blur(8px);
+  opacity: 0.6;
+  animation: corePulse 3s infinite ease-in-out;
+}
+.particle {
+  position: absolute;
+  width: 3px;
+  height: 3px;
+  background: #00E5FF;
+  border-radius: 50%;
+  box-shadow: 0 0 5px #00E5FF;
+  opacity: 0.8;
+}
+.p1 { animation: orbit 4s infinite linear; }
+.p2 { animation: orbit 5s infinite linear reverse; transform-origin: 70px 70px; }
+.p3 { animation: orbit 6s infinite linear; transform-origin: 40px -40px; }
+.p4 { animation: orbit 7s infinite linear reverse; transform-origin: -60px 20px; }
+.p5 { animation: orbit 3.5s infinite linear; transform-origin: 20px 80px; }
+.p6 { animation: orbit 5.5s infinite linear reverse; transform-origin: -40px -40px; }
+.p7 { animation: orbit 8s infinite linear; transform-origin: 90px 10px; }
+.p8 { animation: orbit 4.5s infinite linear reverse; transform-origin: -10px 90px; }
+.p9 { animation: orbit 6.5s infinite linear; transform-origin: 50px -50px; }
+
+@keyframes orbit {
+  from { transform: rotate(0deg) translateX(70px) rotate(0deg); }
+  to { transform: rotate(360deg) translateX(70px) rotate(-360deg); }
+}
+@keyframes corePulse {
+  0%, 100% { transform: scale(0.8); opacity: 0.4; }
+  50% { transform: scale(1.2); opacity: 0.7; }
+}
+</style>
+
+<div class="options">
+  <div class="option" data-choice="accept" onclick="toggleSelect(this)">
+    <div class="letter">✓</div>
+    <div class="content">
+      <h3>Design Approved</h3>
+      <p>This layout (particle orb + bottom nav) is perfect for production.</p>
+    </div>
+  </div>
+</div>

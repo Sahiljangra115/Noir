@@ -1,46 +1,73 @@
 import 'package:flutter/material.dart';
-import 'boot_screen.dart';
+import 'package:provider/provider.dart';
 import 'home_screen.dart';
+import 'control_screen.dart';
+import 'vision_screen.dart';
 import 'settings_screen.dart';
+import 'services/socket_service.dart';
+import 'services/audio_service.dart';
 
 void main() {
-  runApp(const JarvisApp());
+  WidgetsFlutterBinding.ensureInitialized();
+  
+  final socketService = SocketService();
+  final audioService = AudioService(socketService);
+
+  // Start audio/telemetry pipeline
+  audioService.start();
+
+  runApp(
+    MultiProvider(
+      providers: [
+        ChangeNotifierProvider.value(value: socketService),
+        Provider.value(value: audioService),
+      ],
+      child: const JarvisApp(),
+    ),
+  );
 }
 
 class JarvisApp extends StatelessWidget {
-  const JarvisApp({Key? key}) : super(key: key);
+  const JarvisApp({super.key});
 
   @override
   Widget build(BuildContext context) {
     return MaterialApp(
-      title: 'JARVIS Companion',
+      title: 'JARVIS',
       debugShowCheckedModeBanner: false,
-      theme: ThemeData(
-        brightness: Brightness.dark,
-        primaryColor: Colors.white,
-        scaffoldBackgroundColor: const Color(0xFF050505),
-        colorScheme: const ColorScheme.dark(
-          primary: Colors.white,
-          secondary: Color(0xFF00E5FF),
-          surface: Color(0xFF111111),
-        ),
-        fontFamily: 'Roboto', // Better if they had sf pro, but Roboto light works as default
-        textTheme: const TextTheme(
-          displayLarge: TextStyle(fontWeight: FontWeight.w200, letterSpacing: -1.5),
-          bodyLarge: TextStyle(fontWeight: FontWeight.w300, letterSpacing: 0.5),
+      theme: ThemeData.dark().copyWith(
+        scaffoldBackgroundColor: Colors.black,
+        colorScheme: ColorScheme.fromSeed(
+          seedColor: const Color(0xFF00E5FF),
+          brightness: Brightness.dark,
+          surface: const Color(0xFF0A0A0A),
         ),
         appBarTheme: const AppBarTheme(
           backgroundColor: Colors.transparent,
           elevation: 0,
           centerTitle: true,
-          iconTheme: IconThemeData(color: Colors.white70),
-          titleTextStyle: TextStyle(fontSize: 16, fontWeight: FontWeight.w300, letterSpacing: 2, color: Colors.white),
+          titleTextStyle: TextStyle(
+            color: Colors.white,
+            fontSize: 16,
+            fontWeight: FontWeight.w300,
+            letterSpacing: 4,
+          ),
+        ),
+        bottomNavigationBarTheme: const BottomNavigationBarThemeData(
+          backgroundColor: Color(0xFF0A0A0A),
+          selectedItemColor: Color(0xFF00E5FF),
+          unselectedItemColor: Colors.white24,
+          type: BottomNavigationBarType.fixed,
+          elevation: 0,
+          selectedLabelStyle: TextStyle(fontSize: 10, letterSpacing: 1, fontWeight: FontWeight.bold),
+          unselectedLabelStyle: TextStyle(fontSize: 10, letterSpacing: 1),
         ),
       ),
-      initialRoute: '/boot',
+      initialRoute: '/',
       routes: {
-        '/boot': (context) => const BootScreen(),
-        '/home': (context) => const HomeScreen(),
+        '/': (context) => const HomeScreen(),
+        '/control': (context) => const ControlScreen(),
+        '/vision': (context) => const VisionScreen(),
         '/settings': (context) => const SettingsScreen(),
       },
     );
