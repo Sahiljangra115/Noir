@@ -34,137 +34,44 @@ Usage (wired in main.py):
     web.start()
     pipeline.start()
 """
-
 import logging
 import queue
 import threading
 import time
+import os
 from typing import Optional
+from functools import wraps
 
 import cv2
 import numpy as np
+from dotenv import load_dotenv
+
+# Load environment variables from .env
+load_dotenv()
 
 log = logging.getLogger(__name__)
 
 # ── Lazy imports ──────────────────────────────────────────────────────────────
 _flask_ok = False
 try:
-    from flask import Flask, Response, jsonify, render_template_string, request
-    from flask_socketio import SocketIO, emit
+    from flask import Flask, Response, jsonify, render_template_string, request, abort
+    from flask_socketio import SocketIO, emit, disconnect
+    from flask_limiter import Limiter
+    from flask_limiter.util import get_remote_address
     _flask_ok = True
 except ImportError:
     pass
 
-# ── Embedded dashboard HTML ───────────────────────────────────────────────────
-_HTML = """<!DOCTYPE html>
-<html lang="en">
-<head>
-  <meta charset="UTF-8">
-  <meta name="viewport" content="width=device-width, initial-scale=1">
-  <title>JARVIS Robot Dashboard</title>
-  <style>
-    * { box-sizing: border-box; margin: 0; padding: 0; }
-    body { background: #0d0d0d; color: #e0e0e0; font-family: monospace;
-           display: flex; flex-direction: column; align-items: center;
-           padding: 20px; gap: 16px; }
-    h1   { color: #00e5ff; letter-spacing: 4px; font-size: 1.4rem; }
-    #status { background: #1a1a1a; padding: 12px 16px; border-radius: 6px;
-              width: 100%; max-width: 640px; line-height: 1.8; font-size: 0.9rem;}
-    .label  { color: #888; }
-    .val    { color: #00e5ff; font-weight: bold; }
-    #controls { display: grid; grid-template-columns: repeat(3, 80px); gap: 8px; }
-    #controls button {
-      padding: 14px 0; font-size: 1.2rem; border: none; border-radius: 6px;
-      cursor: pointer; background: #1e1e1e; color: #fff; transition: background 0.15s;
-    }
-    #controls button:active { background: #00e5ff; color: #000; }
-    #mode-btns { display: flex; gap: 8px; flex-wrap: wrap; justify-content: center; }
-    #mode-btns button {
-      padding: 8px 14px; font-size: 0.8rem; border: 1px solid #444;
-      border-radius: 20px; cursor: pointer; background: #1e1e1e; color: #ccc;
-    }
-    #mode-btns button:hover { border-color: #00e5ff; color: #00e5ff; }
-    #log { background:#111; border:1px solid #333; padding:8px; border-radius:6px;
-           width:100%; max-width:640px; height:120px; overflow-y:auto;
-           font-size:0.75rem; color:#888; }
-    #phone-badge { padding:4px 10px; border-radius:12px; font-size:0.75rem;
-                   background:#1a1a1a; }
-    .connected    { color:#00ff88; border:1px solid #00ff88; }
-    .disconnected { color:#ff4444; border:1px solid #ff4444; }
-  </style>
-</head>
-<body>
-  <h1>&#9679; JARVIS</h1>
-  <span id="phone-badge" class="disconnected">PHONE: OFFLINE</span>
-
-  <div id="status">
-    <span class="label">MODE </span><span class="val" id="s-mode">–</span> &nbsp;
-    <span class="label">CMD </span><span class="val" id="s-cmd">–</span><br>
-    <span class="label">CAMERA </span><span id="s-yolo" style="color:#aaa">–</span><br>
-    <span class="label">LAST HEARD </span><span id="s-heard" style="color:#aaa">–</span><br>
-    <span class="label">JARVIS </span><span id="s-response" style="color:#00e5ff">–</span>
-  </div>
-
-  <div id="controls">
-    <div></div>
-    <button onclick="cmd('F')" title="Forward">&#9650;</button>
-    <div></div>
-    <button onclick="cmd('L')" title="Left">&#9668;</button>
-    <button onclick="cmd('S')" title="Stop">&#9632;</button>
-    <button onclick="cmd('R')" title="Right">&#9658;</button>
-    <div></div>
-    <button onclick="cmd('B')" title="Backward">&#9660;</button>
-    <div></div>
-  </div>
-
-  <div id="mode-btns">
-    <button onclick="mode('LFR')">Line Follow</button>
-    <button onclick="mode('HUMAN_TRACK')">Track Human</button>
-    <button onclick="mode('VLA')">Autonomous</button>
-    <button onclick="mode('IDLE')">IDLE / Stop</button>
-  </div>
-
-  <div id="log"></div>
-
-<script>
-  function addLog(msg) {
-    const el = document.getElementById('log');
-    el.innerHTML += new Date().toLocaleTimeString() + '  ' + msg + '<br>';
-    el.scrollTop = el.scrollHeight;
-  }
-  function cmd(c) {
-    fetch('/command', {method:'POST',
-      headers:{'Content-Type':'application/json'},
-      body: JSON.stringify({type:'move', cmd:c, duration:1.0})
-    }).then(r=>r.json()).then(d=>addLog('move ' + c + ' \u2192 ' + d.status));
-  }
-  function mode(m) {
-    fetch('/command', {method:'POST',
-      headers:{'Content-Type':'application/json'},
-      body: JSON.stringify({type:'mode', value:m})
-    }).then(r=>r.json()).then(d=>addLog('mode ' + m + ' \u2192 ' + d.status));
-  }
-  setInterval(() => {
-    fetch('/status').then(r=>r.json()).then(d=>{
-      document.getElementById('s-mode').textContent     = d.mode;
-      document.getElementById('s-cmd').textContent      = d.last_cmd;
-      document.getElementById('s-yolo').textContent     = d.yolo_info;
-      document.getElementById('s-heard').textContent    = d.last_heard      || '\u2013';
-      document.getElementById('s-response').textContent = d.jarvis_response || '\u2013';
-      const badge = document.getElementById('phone-badge');
-      if (d.phone_connected) {
-        badge.textContent = 'PHONE: ONLINE';
-        badge.className = 'connected';
-      } else {
-        badge.textContent = 'PHONE: OFFLINE';
-        badge.className = 'disconnected';
-      }
-    });
-  }, 1000);
-</script>
-</body>
-</html>"""
-
+def require_auth(f):
+    @wraps(f)
+    def decorated(*args, **kwargs):
+        token = request.headers.get('Authorization')
+        expected = os.getenv('JARVIS_SECRET_KEY', 'jarvis-robot-secret')
+        if not token or token != f"Bearer {expected}":
+            log.warning("[WEB] Unauthorized REST access attempt from %s", request.remote_addr)
+            return jsonify({"status": "error", "msg": "Unauthorized"}), 401
+        return f(*args, **kwargs)
+    return decorated
 
 class WebServer:
     """
@@ -301,12 +208,22 @@ class WebServer:
         _logging.getLogger("werkzeug").setLevel(_logging.ERROR)
 
         app = Flask(__name__)
-        app.config["SECRET_KEY"] = "jarvis-robot-secret"
+        app.config["SECRET_KEY"] = os.getenv("JARVIS_SECRET_KEY", "jarvis-robot-secret")
+
+        # Rate limiting to prevent command spamming
+        limiter = Limiter(
+            get_remote_address,
+            app=app,
+            default_limits=["200 per day", "50 per hour"],
+            storage_uri="memory://",
+        )
+
+        from backend.config.config import ALLOWED_ORIGINS
 
         sio = SocketIO(
             app,
             async_mode="threading",
-            cors_allowed_origins="*",
+            cors_allowed_origins=ALLOWED_ORIGINS,
             binary=True,
             logger=False,
             engineio_logger=False,
@@ -321,10 +238,13 @@ class WebServer:
             return render_template_string(_HTML)
 
         @app.route("/status")
+        @require_auth
         def status():
             return jsonify(self._full_snapshot())
 
         @app.route("/command", methods=["POST"])
+        @require_auth
+        @limiter.limit("5 per second")
         def command():
             data     = request.get_json(silent=True) or {}
             typ      = data.get("type", "")
@@ -365,7 +285,20 @@ class WebServer:
         # ── SocketIO events ───────────────────────────────────────────────────
 
         @sio.on("connect")
-        def on_connect():
+        def on_connect(auth=None):
+            expected = os.getenv('JARVIS_SECRET_KEY', 'jarvis-robot-secret')
+            
+            # Support both 'auth' dict (SocketIO 4+) and 'token' query param
+            token = None
+            if auth and isinstance(auth, dict):
+                token = auth.get("token")
+            if not token:
+                token = request.args.get("token")
+                
+            if token != expected:
+                log.warning("[WEB] Unauthorized SocketIO connection attempt from %s", request.remote_addr)
+                return False  # Refuse connection
+
             log.info("[WEB] Phone connected: %s", request.sid)
             self._state.phone_connected = True
             if self._voice_pipeline is not None:
@@ -437,3 +370,128 @@ class WebServer:
             port=self._port,
             allow_unsafe_werkzeug=True,
         )
+
+# ── Embedded dashboard HTML ───────────────────────────────────────────────────
+_HTML = """<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>JARVIS Robot Dashboard</title>
+  <style>
+    * { box-sizing: border-box; margin: 0; padding: 0; }
+    body { background: #0d0d0d; color: #e0e0e0; font-family: monospace;
+           display: flex; flex-direction: column; align-items: center;
+           padding: 20px; gap: 16px; }
+    h1   { color: #00e5ff; letter-spacing: 4px; font-size: 1.4rem; }
+    #status { background: #1a1a1a; padding: 12px 16px; border-radius: 6px;
+              width: 100%; max-width: 640px; line-height: 1.8; font-size: 0.9rem;}
+    .label  { color: #888; }
+    .val    { color: #00e5ff; font-weight: bold; }
+    #controls { display: grid; grid-template-columns: repeat(3, 80px); gap: 8px; }
+    #controls button {
+      padding: 14px 0; font-size: 1.2rem; border: none; border-radius: 6px;
+      cursor: pointer; background: #1e1e1e; color: #fff; transition: background 0.15s;
+    }
+    #controls button:active { background: #00e5ff; color: #000; }
+    #mode-btns { display: flex; gap: 8px; flex-wrap: wrap; justify-content: center; }
+    #mode-btns button {
+      padding: 8px 14px; font-size: 0.8rem; border: 1px solid #444;
+      border-radius: 20px; cursor: pointer; background: #1e1e1e; color: #ccc;
+    }
+    #mode-btns button:hover { border-color: #00e5ff; color: #00e5ff; }
+    #log { background:#111; border:1px solid #333; padding:8px; border-radius:6px;
+           width:100%; max-width:640px; height:120px; overflow-y:auto;
+           font-size:0.75rem; color:#888; }
+    #phone-badge { padding:4px 10px; border-radius:12px; font-size:0.75rem;
+                   background:#1a1a1a; }
+    .connected    { color:#00ff88; border:1px solid #00ff88; }
+    .disconnected { color:#ff4444; border:1px solid #ff4444; }
+  </style>
+</head>
+<body>
+  <h1>&#9679; JARVIS</h1>
+  <span id="phone-badge" class="disconnected">PHONE: OFFLINE</span>
+
+  <div id="status">
+    <span class="label">MODE </span><span class="val" id="s-mode">–</span> &nbsp;
+    <span class="label">CMD </span><span class="val" id="s-cmd">–</span><br>
+    <span class="label">CAMERA </span><span id="s-yolo" style="color:#aaa">–</span><br>
+    <span class="label">LAST HEARD </span><span id="s-heard" style="color:#aaa">–</span><br>
+    <span class="label">JARVIS </span><span id="s-response" style="color:#00e5ff">–</span>
+  </div>
+
+  <div id="controls">
+    <div></div>
+    <button onclick="cmd('F')" title="Forward">&#9650;</button>
+    <div></div>
+    <button onclick="cmd('L')" title="Left">&#9668;</button>
+    <button onclick="cmd('S')" title="Stop">&#9632;</button>
+    <button onclick="cmd('R')" title="Right">&#9658;</button>
+    <div></div>
+    <button onclick="cmd('B')" title="Backward">&#9660;</button>
+    <div></div>
+  </div>
+
+  <div id="mode-btns">
+    <button onclick="mode('LFR')">Line Follow</button>
+    <button onclick="mode('HUMAN_TRACK')">Track Human</button>
+    <button onclick="mode('VLA')">Autonomous</button>
+    <button onclick="mode('IDLE')">IDLE / Stop</button>
+  </div>
+
+  <div id="log"></div>
+
+<script>
+  function addLog(msg) {
+    const el = document.getElementById('log');
+    el.innerHTML += new Date().toLocaleTimeString() + '  ' + msg + '<br>';
+    el.scrollTop = el.scrollHeight;
+  }
+  function cmd(c) {
+    fetch('/command', {method:'POST',
+      headers:{'Content-Type':'application/json'},
+      body: JSON.stringify({type:'move', cmd:c, duration:1.0})
+    }).then(r=>r.json()).then(d=>addLog('move ' + c + ' \u2192 ' + d.status));
+  }
+  function mode(m) {
+    fetch('/command', {method:'POST',
+      headers:{'Content-Type':'application/json'},
+      body: JSON.stringify({type:'mode', value:m})
+    }).then(r=>r.json()).then(d=>addLog('mode ' + m + ' \u2192 ' + d.status));
+  }
+  setInterval(() => {
+    fetch('/status').then(r=>r.json()).then(d=>{
+      document.getElementById('s-mode').textContent     = d.mode;
+      document.getElementById('s-cmd').textContent      = d.last_cmd;
+      document.getElementById('s-yolo').textContent     = d.yolo_info;
+      document.getElementById('s-heard').textContent    = d.last_heard      || '\u2013';
+      document.getElementById('s-response').textContent = d.jarvis_response || '\u2013';
+      const badge = document.getElementById('phone-badge');
+      if (d.phone_connected) {
+        badge.textContent = 'PHONE: ONLINE';
+        badge.className = 'connected';
+      } else {
+        badge.textContent = 'PHONE: OFFLINE';
+        badge.className = 'disconnected';
+      }
+    });
+  }, 1000);
+</script>
+</body>
+</html>"""
+
+if __name__ == "__main__":
+    # For quick standalone testing (mocking dependencies)
+    from backend.services.robot_state import RobotState
+    from backend.esp32.robot_comms import RobotComms
+    
+    s = RobotState()
+    c = RobotComms(host="127.0.0.1", port=8888) # mock
+    ws = WebServer(state=s, comms=c)
+    ws.start()
+    try:
+        while True:
+            time.sleep(1)
+    except KeyboardInterrupt:
+        ws.stop()

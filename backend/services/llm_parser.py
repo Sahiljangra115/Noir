@@ -155,12 +155,39 @@ class LLMParser:
         if not isinstance(result.get("actions"), list):
             result["actions"] = []
 
-        # Sanitise actions — drop anything with unknown type
+        # Sanitise actions — drop anything with unknown type or invalid values
         _valid_types = {"mode", "move", "goto", "arm"}
-        result["actions"] = [
-            a for a in result["actions"]
-            if isinstance(a, dict) and a.get("type") in _valid_types
-        ]
+        _valid_modes = {"LFR", "HUMAN_TRACK", "VLA", "GOTO", "MANUAL", "IDLE"}
+        _valid_cmds  = {"F", "B", "L", "R", "S"}
+
+        sanitized_actions = []
+        for a in result.get("actions", []):
+            if not isinstance(a, dict):
+                continue
+            
+            typ = a.get("type")
+            if typ not in _valid_types:
+                continue
+            
+            # Additional value-level sanitization
+            if typ == "mode":
+                if a.get("value") not in _valid_modes:
+                    log.warning("[LLM] Dropping invalid mode value: %s", a.get("value"))
+                    continue
+            elif typ == "move":
+                if a.get("cmd") not in _valid_cmds:
+                    log.warning("[LLM] Dropping invalid move command: %s", a.get("cmd"))
+                    continue
+                # Ensure duration is a safe number
+                try:
+                    duration = float(a.get("duration", 1.0))
+                    a["duration"] = min(max(duration, 0.1), 30.0)  # cap at 30 seconds
+                except (TypeError, ValueError):
+                    a["duration"] = 1.0
+            
+            sanitized_actions.append(a)
+
+        result["actions"] = sanitized_actions
 
         log.debug(
             "[LLM] speech=%r  actions=%s",

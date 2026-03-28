@@ -38,11 +38,16 @@ import argparse
 import logging
 import sys
 import time
+import os
 from typing import Optional
 from collections import deque
 
 import cv2
 import numpy as np
+from dotenv import load_dotenv
+
+# Load environment variables from .env
+load_dotenv()
 
 # ── Core modules ─────────────────────────────────────────────────────────────
 from backend.services.robot_state import RobotState

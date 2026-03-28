@@ -2,6 +2,12 @@ from flask import Blueprint, request, jsonify
 from typing import Any, Dict
 from pydantic import BaseModel, ValidationError
 import json
+import os
+from functools import wraps
+from dotenv import load_dotenv
+
+# Load environment variables
+load_dotenv()
 
 robot_api = Blueprint("api", __name__)
 
@@ -14,11 +20,22 @@ def set_pipeline_refs(command_queue, robot_state):
     _command_queue = command_queue
     _robot_state = robot_state
 
+def require_auth(f):
+    @wraps(f)
+    def decorated(*args, **kwargs):
+        token = request.headers.get('Authorization')
+        expected = os.getenv('JARVIS_SECRET_KEY', 'jarvis-robot-secret')
+        if not token or token != f"Bearer {expected}":
+            return jsonify({"status": "error", "msg": "Unauthorized"}), 401
+        return f(*args, **kwargs)
+    return decorated
+
 # Pydantic model for POST /api/robot/command
 class RobotCommand(BaseModel):
     type: str
 
 @robot_api.route("/api/robot/command", methods=["POST"])
+@require_auth
 def robot_command():
     if _command_queue is None:
         return jsonify({"error": "Command queue unavailable"}), 500
@@ -37,6 +54,7 @@ def robot_command():
     return jsonify({"status": "queued"})
 
 @robot_api.route("/api/robot/state", methods=["GET"])
+@require_auth
 def robot_state_():
     if _robot_state is None:
         return jsonify({"error": "Robot state unavailable"}), 500
