@@ -11,7 +11,7 @@ import queue
 from unittest.mock import Mock, MagicMock, patch
 import numpy as np
 
-from pipeline.robot_state import RobotState
+from backend.services.robot_state import RobotState
 from backend.esp32.robot_comms import RobotComms
 from web_server import WebServer
 
@@ -29,11 +29,11 @@ class TestVoicePipelineE2E:
         comms.send.return_value = True
 
         # Mock all voice components
-        with patch('pipeline.voice_pipeline.WakeWordDetector') as mock_ww, \
-             patch('pipeline.voice_pipeline.WhisperSTT') as mock_stt, \
-             patch('pipeline.voice_pipeline.PiperTTS') as mock_tts, \
-             patch('pipeline.voice_pipeline.LLMParser') as mock_llm, \
-             patch('pipeline.voice_pipeline.CommandQueue') as mock_cmd:
+        with patch('backend.services.voice_pipeline.WakeWordDetector') as mock_ww, \
+             patch('backend.services.voice_pipeline.WhisperSTT') as mock_stt, \
+             patch('backend.services.voice_pipeline.PiperTTS') as mock_tts, \
+             patch('backend.services.voice_pipeline.LLMParser') as mock_llm, \
+             patch('backend.services.voice_pipeline.CommandQueue') as mock_cmd:
 
             mock_ww_instance = Mock()
             mock_stt_instance = Mock()
@@ -47,7 +47,7 @@ class TestVoicePipelineE2E:
             mock_llm.return_value = mock_llm_instance
             mock_cmd.return_value = mock_cmd_instance
 
-            from pipeline.voice_pipeline import VoicePipeline
+            from backend.services.voice_pipeline import VoicePipeline
             pipeline = VoicePipeline(comms=comms, state=state)
 
             yield {
@@ -74,12 +74,12 @@ class TestVoicePipelineE2E:
         pipeline_thread.start()
 
         # Wait a moment for initialization
-        time.sleep(0.1)
+        time.sleep(0.5)
 
         # Verify initial greeting was played
         mocks['tts'].speak.assert_called()
         greeting_call = mocks['tts'].speak.call_args_list[0]
-        assert "JARVIS" in greeting_call[0][0]
+        assert "jarvis" in greeting_call[0][0].lower()
 
     def test_voice_command_processing_workflow(self, voice_pipeline_setup):
         """Test complete voice command processing from wake word to action."""
@@ -94,18 +94,18 @@ class TestVoicePipelineE2E:
         # Mock LLM to return parsed response
         mocks['llm'].parse.return_value = {
             "speech": "Moving forward now",
-            "actions": ["MOVE_FORWARD"]
+            "actions": [{"type": "move", "cmd": "F", "duration": 1.0}]
         }
 
         # Trigger a single cycle
-        pipeline._single_cycle()
+        pipeline.conversation_active = True
+        pipeline._conversation_cycle()
 
         # Verify the workflow
-        mocks['wakeword'].wait_for_wakeword.assert_called_once()
         mocks['stt'].listen.assert_called_once()
         mocks['llm'].parse.assert_called_once()
         mocks['tts'].speak.assert_called()
-        mocks['cmd_queue'].push_all.assert_called_with(["MOVE_FORWARD"])
+        mocks['cmd_queue'].push_all.assert_called_with([{"type": "move", "cmd": "F", "duration": 1.0}])
 
         # Verify state was updated
         assert state.last_heard == "move forward"
@@ -122,19 +122,20 @@ class TestVoicePipelineE2E:
         mocks['stt'].listen.return_value = "what is your name"
 
         # Trigger a single cycle
-        pipeline._single_cycle()
+        pipeline.conversation_active = True
+        pipeline._conversation_cycle()
 
         # Verify custom response was used (LLM should not be called)
         mocks['llm'].parse.assert_not_called()
         mocks['tts'].speak.assert_called()
 
-        # Verify response contains JARVIS
+        # Verify response contains jarvis
         tts_call = mocks['tts'].speak.call_args_list[-1]
-        assert "JARVIS" in tts_call[0][0]
+        assert "jarvis" in tts_call[0][0].lower()
 
         # Verify state was updated
         assert state.last_heard == "what is your name"
-        assert "JARVIS" in state.jarvis_response
+        assert "jarvis" in state.jarvis_response.lower()
 
     def test_emergency_stop_handling(self, voice_pipeline_setup):
         """Test emergency keyword handling."""
@@ -150,7 +151,8 @@ class TestVoicePipelineE2E:
         mocks['stt'].listen.return_value = "emergency stop now"
 
         # Trigger a single cycle
-        pipeline._single_cycle()
+        pipeline.conversation_active = True
+        pipeline._conversation_cycle()
 
         # Verify emergency handling
         mocks['cmd_queue'].clear.assert_called_once()

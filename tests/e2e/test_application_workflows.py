@@ -10,7 +10,7 @@ from unittest.mock import Mock, patch, MagicMock
 import numpy as np
 import queue
 
-from pipeline.robot_state import RobotState
+from backend.services.robot_state import RobotState
 from backend.esp32.robot_comms import RobotComms
 
 
@@ -81,15 +81,16 @@ class TestCompleteWorkflows:
         voice['cmd_queue'].push_all.side_effect = mock_command_processor
 
         # Execute the voice processing workflow
-        from pipeline.voice_pipeline import VoicePipeline
-        with patch('pipeline.voice_pipeline.WakeWordDetector', return_value=voice['wakeword']), \
-             patch('pipeline.voice_pipeline.WhisperSTT', return_value=voice['stt']), \
-             patch('pipeline.voice_pipeline.PiperTTS', return_value=voice['tts']), \
-             patch('pipeline.voice_pipeline.LLMParser', return_value=voice['llm']), \
-             patch('pipeline.voice_pipeline.CommandQueue', return_value=voice['cmd_queue']):
+        from backend.services.voice_pipeline import VoicePipeline
+        with patch('backend.services.voice_pipeline.WakeWordDetector', return_value=voice['wakeword']), \
+             patch('backend.services.voice_pipeline.WhisperSTT', return_value=voice['stt']), \
+             patch('backend.services.voice_pipeline.PiperTTS', return_value=voice['tts']), \
+             patch('backend.services.voice_pipeline.LLMParser', return_value=voice['llm']), \
+             patch('backend.services.voice_pipeline.CommandQueue', return_value=voice['cmd_queue']):
 
             pipeline = VoicePipeline(comms=comms, state=state)
-            pipeline._single_cycle()
+            pipeline.conversation_active = True
+            pipeline._conversation_cycle()
 
             # Verify the complete workflow
             voice['wakeword'].wait_for_wakeword.assert_called_once()
@@ -234,17 +235,18 @@ class TestCompleteWorkflows:
         voice['stt'].listen.return_value = ""  # Empty transcription
 
         # Voice pipeline should handle empty input
-        with patch('pipeline.voice_pipeline.WakeWordDetector', return_value=voice['wakeword']), \
-             patch('pipeline.voice_pipeline.WhisperSTT', return_value=voice['stt']), \
-             patch('pipeline.voice_pipeline.PiperTTS', return_value=voice['tts']), \
-             patch('pipeline.voice_pipeline.LLMParser', return_value=voice['llm']), \
-             patch('pipeline.voice_pipeline.CommandQueue', return_value=voice['cmd_queue']):
+        with patch('backend.services.voice_pipeline.WakeWordDetector', return_value=voice['wakeword']), \
+             patch('backend.services.voice_pipeline.WhisperSTT', return_value=voice['stt']), \
+             patch('backend.services.voice_pipeline.PiperTTS', return_value=voice['tts']), \
+             patch('backend.services.voice_pipeline.LLMParser', return_value=voice['llm']), \
+             patch('backend.services.voice_pipeline.CommandQueue', return_value=voice['cmd_queue']):
 
-            from pipeline.voice_pipeline import VoicePipeline
+            from backend.services.voice_pipeline import VoicePipeline
             pipeline = VoicePipeline(comms=comms, state=state)
+            pipeline.conversation_active = True
 
             # Should handle empty transcription gracefully
-            pipeline._single_cycle()
+            pipeline._conversation_cycle()
 
             # Should provide feedback about failed transcription
             voice['tts'].speak.assert_called()

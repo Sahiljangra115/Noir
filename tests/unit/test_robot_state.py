@@ -4,7 +4,7 @@ Unit tests for RobotState functionality.
 import pytest
 import threading
 import time
-from pipeline.robot_state import RobotState
+from backend.services.robot_state import RobotState
 
 
 class TestRobotState:

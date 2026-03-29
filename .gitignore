@@ -1,3 +1,8 @@
+# Environment and Secrets
+.env
+.env.*
+.coverage
+
 # Python
 __pycache__/
 *.py[cod]
