@@ -27,6 +27,11 @@ jarvis_app/.flutter-plugins-dependencies
 jarvis_app/.packages
 jarvis_app/flutter.log
 
-# OS
+# IDE and OS
 .DS_Store
 .claude/
+.idea/
+
+# ESP32 build artifacts
+backend/esp32/build/
+backend/esp32/sdkconfig.old

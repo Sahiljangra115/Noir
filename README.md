@@ -26,6 +26,10 @@ JARVIS is a multi-modal autonomous robot assistant that combines Speech-to-Text 
 - ESP32 hardware (optional, for physical robot control)
 
 ### Backend Setup
+0. Enter the project Python environment (required):
+   ```bash
+   ml
+   ```
 1. Install dependencies:
    ```bash
    uv pip install -e .
@@ -37,6 +41,8 @@ JARVIS is a multi-modal autonomous robot assistant that combines Speech-to-Text 
    ```bash
    python3 -m backend.main
    ```
+
+All Python/`uv`/`pytest` commands in this repo should be run after `ml`.
 
 ### Mobile App Build
 1. Open `jarvis_app` in Android Studio.
