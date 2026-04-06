@@ -1,7 +1,7 @@
 """
 pipeline/llm_parser.py
 ───────────────────────
-Sends the transcribed voice command to Gemma 3 4B (via Ollama) and
+Sends the transcribed voice command to Gemma 4 (via Ollama) and
 parses the reply into a structured JSON object containing:
 
     {
@@ -37,21 +37,56 @@ import json
 import logging
 import re
 import time
+from typing import List, Literal, Union, Annotated
 
 import requests
+from pydantic import BaseModel, Field
 
 log = logging.getLogger(__name__)
 
+# ── Action Models ─────────────────────────────────────────────────────────────
+
+class ModeAction(BaseModel):
+    type: Literal["mode"]
+    value: Literal["LFR", "HUMAN_TRACK", "VLA", "GOTO", "MANUAL", "IDLE"]
+
+class MoveAction(BaseModel):
+    type: Literal["move"]
+    cmd: Literal["F", "B", "L", "R", "S"]
+    duration: float = Field(default=1.0, ge=0.1, le=30.0)
+
+class GotoAction(BaseModel):
+    type: Literal["goto"]
+    target: str
+
+class ArmAction(BaseModel):
+    type: Literal["arm"]
+    cmd: Literal["GRAB", "RELEASE", "UP", "DOWN"]
+
+# Discriminated union for automatic sub-model selection
+RobotAction = Annotated[
+    Union[ModeAction, MoveAction, GotoAction, ArmAction],
+    Field(discriminator="type")
+]
+
+class LLMResponse(BaseModel):
+    speech: str = "Done."
+    actions: List[RobotAction] = Field(default_factory=list)
+
 # ── Ollama endpoint ───────────────────────────────────────────────────────────
 _OLLAMA_URL    = "http://localhost:11434/api/generate"
-_DEFAULT_MODEL = "qwen3.5-nothink:latest"  # Optimized Qwen 3.5 without thinking
+_DEFAULT_MODEL = "gemma4-e2b-nothink:latest"  # Upgraded to Gemma 4
 _TIMEOUT_S     = 20          # s – give it more time for structured output
 
 
 # ── System prompt ─────────────────────────────────────────────────────────────
 # Injected once per request.  {state} is replaced at call time.
 _SYSTEM_PROMPT = """\
-You are jarvis — an AI assistant.
+You are jarvis — an AI assistant for a wheeled robot.
+Current Mode: {mode}
+Last Command: {last_cmd}
+Vision Context: {yolo_info}
+
 IMPORTANT: DO NOT include any thinking process or reasoning out loud.
 
 Respond with ONLY a raw JSON object — no markdown, no preamble.
@@ -130,64 +165,30 @@ class LLMParser:
 
     def _parse_json(self, raw: str) -> dict:
         """
-        Robust JSON extractor.  Gemma 3 with format=json rarely adds noise,
-        but this handles edge cases where it wraps the JSON in markdown fences.
+        Robust JSON extractor using Pydantic for validation.
         """
         # Strip markdown code fences if present
         raw = re.sub(r"```(?:json)?", "", raw).strip()
 
-        try:
-            result = json.loads(raw)
-        except json.JSONDecodeError:
-            # Try to extract just the first {...} block
+        # Try to find a JSON block if it's not a pure JSON string
+        if not (raw.startswith("{") and raw.endswith("}")):
             match = re.search(r"\{.*\}", raw, re.DOTALL)
             if match:
-                try:
-                    result = json.loads(match.group())
-                except json.JSONDecodeError:
-                    return self._fallback("I couldn't parse my own response.")
-            else:
+                raw = match.group()
+
+        try:
+            # Validate and sanitize using Pydantic
+            response_model = LLMResponse.model_validate_json(raw)
+            result = response_model.model_dump()
+        except Exception as exc:
+            log.warning("[LLM] Validation failed: %s", exc)
+            # Try to at least get the speech if the whole thing failed
+            try:
+                partial = json.loads(raw)
+                speech = partial.get("speech", "I had trouble understanding that.")
+                return self._fallback(speech)
+            except:
                 return self._fallback("I produced an invalid response.")
-
-        # Validate structure
-        if not isinstance(result.get("speech"), str):
-            result["speech"] = "Done."
-        if not isinstance(result.get("actions"), list):
-            result["actions"] = []
-
-        # Sanitise actions — drop anything with unknown type or invalid values
-        _valid_types = {"mode", "move", "goto", "arm"}
-        _valid_modes = {"LFR", "HUMAN_TRACK", "VLA", "GOTO", "MANUAL", "IDLE"}
-        _valid_cmds  = {"F", "B", "L", "R", "S"}
-
-        sanitized_actions = []
-        for a in result.get("actions", []):
-            if not isinstance(a, dict):
-                continue
-            
-            typ = a.get("type")
-            if typ not in _valid_types:
-                continue
-            
-            # Additional value-level sanitization
-            if typ == "mode":
-                if a.get("value") not in _valid_modes:
-                    log.warning("[LLM] Dropping invalid mode value: %s", a.get("value"))
-                    continue
-            elif typ == "move":
-                if a.get("cmd") not in _valid_cmds:
-                    log.warning("[LLM] Dropping invalid move command: %s", a.get("cmd"))
-                    continue
-                # Ensure duration is a safe number
-                try:
-                    duration = float(a.get("duration", 1.0))
-                    a["duration"] = min(max(duration, 0.1), 30.0)  # cap at 30 seconds
-                except (TypeError, ValueError):
-                    a["duration"] = 1.0
-            
-            sanitized_actions.append(a)
-
-        result["actions"] = sanitized_actions
 
         log.debug(
             "[LLM] speech=%r  actions=%s",

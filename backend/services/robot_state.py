@@ -7,6 +7,7 @@ voice pipeline can all touch it safely.
 """
 
 import threading
+import copy
 
 
 class RobotState:
@@ -42,6 +43,7 @@ class RobotState:
         self._last_heard     : str        = ""
         self._jarvis_response: str        = ""
         self._camera_device  : str        = ""
+        self._ptt_active     : bool       = False
 
     # ── mode ─────────────────────────────────────────────────────────────────
     @property
@@ -102,7 +104,7 @@ class RobotState:
     @property
     def imu(self) -> dict:
         with self._lock:
-            return dict(self._imu)
+            return copy.deepcopy(self._imu)
 
     @imu.setter
     def imu(self, value: dict) -> None:
@@ -113,7 +115,7 @@ class RobotState:
     @property
     def gps(self) -> dict:
         with self._lock:
-            return dict(self._gps)
+            return copy.deepcopy(self._gps)
 
     @gps.setter
     def gps(self, value: dict) -> None:
@@ -153,8 +155,19 @@ class RobotState:
         with self._lock:
             self._camera_device = value
 
+    # ── ptt_active ────────────────────────────────────────────────────────────
+    @property
+    def ptt_active(self) -> bool:
+        with self._lock:
+            return self._ptt_active
+
+    @ptt_active.setter
+    def ptt_active(self, value: bool) -> None:
+        with self._lock:
+            self._ptt_active = value
+
     def snapshot(self) -> dict:
-        """Return a plain dict copy – safe to pass across threads."""
+        """Return a deep dict copy – safe to pass across threads."""
         with self._lock:
             return {
                 "mode":             self._mode,
@@ -162,9 +175,10 @@ class RobotState:
                 "goto_target":      self._goto_target,
                 "yolo_info":        self._yolo_info,
                 "phone_connected":  self._phone_connected,
-                "imu":              dict(self._imu),
-                "gps":              dict(self._gps),
+                "imu":              copy.deepcopy(self._imu),
+                "gps":              copy.deepcopy(self._gps),
                 "last_heard":       self._last_heard,
                 "jarvis_response":  self._jarvis_response,
                 "camera_device":    self._camera_device,
+                "ptt_active":       self._ptt_active,
             }

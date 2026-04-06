@@ -136,10 +136,12 @@ class RobotBrain:
         vla_model:  str  = "gemma4-e2b-nothink:latest",
         wake_sens:  float = 0.6,
         stt_threshold: int = 850,
+        use_wake_word: bool = True,
     ) -> None:
         self.device     = device
         self.use_socket = use_socket
         self.use_web    = use_web
+        self.use_wake_word = use_wake_word
 
         # ── Shared thread-safe state ──────────────────────────────────────
         self._state = RobotState()
@@ -171,6 +173,7 @@ class RobotBrain:
             state=self._state,
             wake_sensitivity=wake_sens,
             stt_threshold=stt_threshold,
+            enable_wake_word=use_wake_word,
         )
 
         # Wire TTS callback: when phone connected → phone speaker only
@@ -373,6 +376,15 @@ class RobotBrain:
             (10, 90), font=cv2.FONT_HERSHEY_PLAIN, size=1.0,
             color=_CLR_GREEN if sock_ok else _CLR_RED
         )
+
+        # ── PTT Indicator ─────────────────────────────────────────────────────
+        if self._state.ptt_active:
+            # Use red for high visibility listening state
+            draw_text(
+                frame, "[ PTT LISTENING ]",
+                (frame.shape[1] - 220, 32), size=0.7, color=(0, 0, 255), thickness=2
+            )
+
         return frame
 
     # ── Main loop ─────────────────────────────────────────────────────────────
@@ -434,7 +446,10 @@ class RobotBrain:
                 log.warning(f"[BRAIN] Failed to register REST API blueprint: {api_exc}")
         self._pipeline.start()
 
-        print("\n[BRAIN] Running.  Hotkeys: q=quit  1=LFR  2=Human  3=VLA  0=Idle\n")
+        print("\n[BRAIN] Running.  Hotkeys: q=quit  1=LFR  2=Human  3=VLA  0=Idle")
+        if not self.use_wake_word:
+            print("[BRAIN] PTT mode: hold SPACE in the Robot Brain window to talk.")
+        print()
         self._state.mode = MODE_IDLE
 
         # Error tracking for recovery
@@ -542,6 +557,11 @@ class RobotBrain:
                     # ── Keyboard shortcuts ────────────────────────────────────────
                     try:
                         key = cv2.waitKey(1) & 0xFF
+                        # Universal PTT: Allow space bar force-listen even if wake-word is technically enabled
+                        self._state.ptt_active = (key == ord(" "))
+                        if self._state.ptt_active:
+                            self._pipeline.trigger_force_listen()
+
                         if key == ord("q"):
                             print("[BRAIN] Quit.")
                             break
@@ -580,6 +600,7 @@ class RobotBrain:
             # ── Cleanup ───────────────────────────────────────────────────────
             try:
                 self._send("S")  # Emergency stop
+                self._state.ptt_active = False
                 cap.release()
                 if self.use_socket:
                     self.comms.close()
@@ -615,6 +636,8 @@ def _parse_args() -> argparse.Namespace:
                    help="Wake word sensitivity (0.0 to 1.0, default: 0.6)")
     p.add_argument("--stt-threshold", type=int, default=850,
                    help="Speech energy threshold (default: 850)")
+    p.add_argument("--no-wake-word", action="store_true",
+                   help="Disable wake-word and use hold-SPACE push-to-talk in OpenCV window")
     return p.parse_args()
 
 
@@ -635,6 +658,7 @@ def main() -> None:
         vla_model=args.model,
         wake_sens=args.sensitivity,
         stt_threshold=args.stt_threshold,
+        use_wake_word=not args.no_wake_word,
     )
     brain.run()
 

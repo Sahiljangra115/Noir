@@ -94,6 +94,7 @@ class WhisperSTT:
         max_duration:      float = 12.0,   # shorter max
         silence_timeout:   float = _SILENCE_TIMEOUT,
         no_speech_timeout: float = _NO_SPEECH_TIMEOUT,
+        ptt_callback:      callable = None,
     ) -> str:
         """Record from the laptop mic until the user stops speaking."""
         self._load()
@@ -128,6 +129,15 @@ class WhisperSTT:
             blocksize=_CHUNK,
         ) as stream:
             for _ in range(max_chunks):
+                # PTT support: Stop instantly if space bar is released
+                if ptt_callback and not ptt_callback():
+                    if speech_detected:
+                        print("[PTT released]", end=" ", flush=True)
+                        break
+                    else:
+                        print("[PTT released, no speech]")
+                        return ""
+
                 chunk, _ = stream.read(_CHUNK)
                 rms = float(np.sqrt(np.mean(chunk.astype(np.float32) ** 2)))
 
@@ -166,6 +176,7 @@ class WhisperSTT:
         max_duration:      float = 12.0,
         silence_timeout:   float = _SILENCE_TIMEOUT,
         no_speech_timeout: float = _NO_SPEECH_TIMEOUT,
+        ptt_callback:      callable = None,
     ) -> str:
         """
         Transcribe audio arriving as PCM16 bytes via a Queue.
@@ -194,6 +205,15 @@ class WhisperSTT:
         print("[STT] Listening (phone)…", end=" ", flush=True)
 
         for _ in range(max_chunks):
+            # PTT support: Stop instantly if space bar is released
+            if ptt_callback and not ptt_callback():
+                if speech_detected:
+                    print("[PTT released]", end=" ", flush=True)
+                    break
+                else:
+                    print("[PTT released, no speech]")
+                    return ""
+
             try:
                 raw: bytes = audio_queue.get(timeout=0.1)
             except queue.Empty:

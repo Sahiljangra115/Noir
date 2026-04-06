@@ -1,28 +1,21 @@
 """
-vision_processor.py – VLA (Vision-Language-Action) Layer
-──────────────────────────────────────────────────────────
+vision_processor.py – Gemma 4 VLA (Vision-Language-Action) Layer
+───────────────────────────────────────────────────────────────
 Sends a JPEG-encoded frame to a locally-running Ollama instance
-(model: moondream or llava) and parses the reply into one of four
-high-level navigation intents:
+(model: gemma4-e2b-nothink:latest) and parses the reply into a 
+unified JSON object containing both speech and actions.
 
-    FOLLOW  – a person is visible and reachable
-    SEARCH  – no person in frame, rotate to find one
-    STOP    – obstacle too close / unknown situation
-    AVOID   – danger / blocked path
-
-The class is intentionally thin so main.py stays easy to read.
-Heavy CV work (YOLO, line following) lives in tracker.py.
-
-Usage:
-    vla = VLAProcessor()
-    intent = vla.get_intent(frame)   # returns one of FOLLOW/SEARCH/STOP/AVOID
+The model only receives a frame when a "significant change" is 
+detected via OpenCV, saving compute and preventing redundant calls.
 """
 
 import base64
 import hashlib
 import logging
 import time
-from typing import Optional
+import json
+import re
+from typing import Optional, Dict, Any
 
 import cv2
 import numpy as np
@@ -30,37 +23,34 @@ import requests
 log = logging.getLogger(__name__)
 
 # ── Ollama defaults ────────────────────────────────────────────────────────────
-_OLLAMA_URL   = "http://localhost:11434/api/generate"
-_DEFAULT_MODEL = "moondream"       # swap to "llava" if moondream isn't pulled
-_TIMEOUT_S    = 6                  # seconds – keep short; GPU is fast locally
-_JPEG_QUALITY = 65                 # lower quality = smaller payload = faster
+_OLLAMA_URL    = "http://localhost:11434/api/generate"
+_DEFAULT_MODEL = "gemma4-e2b-nothink:latest"
+_TIMEOUT_S     = 20                 # Vision LLMs need more time than text
+_JPEG_QUALITY  = 65
+_FRAME_RESIZE_MAX = 640
 
-# Performance optimization settings
-_CACHE_DURATION_S = 1.5            # Cache VLA responses for similar frames
-_FRAME_RESIZE_MAX = 640            # Resize large frames for faster processing
+# ── Thresholds ────────────────────────────────────────────────────────────────
+_DIFF_THRESHOLD = 15.0              # MSE threshold for "significant change"
 
-# The reply must be exactly one of these tokens (case-insensitive match)
-_VALID_INTENTS = frozenset({"FOLLOW", "SEARCH", "STOP", "AVOID"})
+_PROMPT = """\
+You are the navigation and perception brain of JARVIS, a wheeled robot.
+Analyze this image and describe what you see, specifically focusing on your progress if you have a goal.
 
-_PROMPT = (
-    "You are the navigation brain of a wheeled robot. "
-    "Look at this image and reply with EXACTLY one word from this list:\n"
-    "  FOLLOW – a person is clearly visible and you should follow them.\n"
-    "  SEARCH – no person is visible; the robot should rotate to find one.\n"
-    "  STOP   – an obstacle is dangerously close or the path is completely blocked.\n"
-    "  AVOID  – there is a hazard (stairs, edge, wall very close).\n"
-    "Reply with ONLY that single word. No punctuation. No explanation."
-)
+Respond with ONLY a raw JSON object — no markdown, no preamble.
+Respond with ONLY a JSON object in this format:
+{
+    "speech": "Short description of what you see or your progress.",
+    "actions": [{"type": "move", "cmd": "F", "duration": 2.0}]
+}
 
+Available movement commands: F (Forward), B (Backward), L (Left), R (Right), S (Stop).
+Keep durations short (1.0 to 3.0 seconds).
+"""
 
-class VLAProcessor:
+class GemmaVLAProcessor:
     """
-    Wraps the Ollama REST API for vision-language navigation decisions.
-    Includes caching and frame optimization for better performance.
-
-    The get_intent() call is synchronous (it blocks until the model replies).
-    main.py calls it on a timer (e.g. every 2 s) so the main CV loop is not
-    blocked on every frame.
+    Event-driven VLA processor using Gemma 4.
+    Only triggers inference when visual changes are detected.
     """
 
     def __init__(
@@ -68,198 +58,118 @@ class VLAProcessor:
         ollama_url: str = _OLLAMA_URL,
         model: str = _DEFAULT_MODEL,
     ) -> None:
-        # Input validation
-        if not isinstance(ollama_url, str) or not ollama_url:
-            raise ValueError(f"Invalid ollama_url: {ollama_url!r}")
-        if not isinstance(model, str) or not model:
-            raise ValueError(f"Invalid model: {model!r}")
-
         self.url   = ollama_url
         self.model = model
-        self._last_call: float = 0.0
-
-        # Performance optimization: response caching
-        self._cache: dict[str, tuple[str, float]] = {}  # frame_hash -> (intent, timestamp)
-        self._session = requests.Session()  # Reuse connections
-
+        self._last_analyzed_frame: Optional[np.ndarray] = None
+        self._session = requests.Session()
+        
         # Connection optimization
-        adapter = requests.adapters.HTTPAdapter(
-            pool_connections=1,
-            pool_maxsize=2,
-            max_retries=0  # Fast fail for real-time operation
-        )
+        adapter = requests.adapters.HTTPAdapter(pool_connections=1, pool_maxsize=2)
         self._session.mount("http://", adapter)
-        self._session.mount("https://", adapter)
+        
+        log.info("[VLA] Gemma VLA ready – model=%s", model)
 
-        # Circuit breaker pattern for reliability
-        self._failure_count = 0
-        self._last_failure_time = 0.0
-        self._circuit_open = False
-        self._max_failures = 3
-        self._circuit_timeout = 30.0  # 30 seconds
-
-        log.info("[VLA] Processor ready – model=%s  url=%s", model, ollama_url)
-        print(f"[VLA] Using model '{model}' via Ollama at {ollama_url}")
-
-    def _compute_frame_hash(self, frame: np.ndarray) -> str:
-        """Compute hash of frame for caching purposes."""
-        # Use a smaller sample for faster hashing
-        h, w = frame.shape[:2]
-        sample = frame[::h//8, ::w//8]  # Sample every 8th pixel
-        return hashlib.md5(sample.tobytes()).hexdigest()[:16]  # Use first 16 chars
-
-    # ── Public API ─────────────────────────────────────────────────────────────
-
-    def get_intent(self, frame: np.ndarray) -> str:
+    def has_significant_change(self, frame: np.ndarray) -> bool:
         """
-        Encode *frame*, query Ollama, return a validated intent string.
-        Uses caching, circuit breaker pattern, and frame optimization for reliability.
-        Falls back to 'STOP' on any error so the bot never drives blindly.
+        Detects if the frame has changed enough to warrant a new LLM analysis.
+        Uses a fast MSE comparison on downsampled grayscale images.
         """
-        # Input validation
-        if frame is None or frame.size == 0:
-            log.warning("[VLA] Invalid frame provided")
-            return "STOP"
-
-        if not isinstance(frame, np.ndarray) or len(frame.shape) != 3:
-            log.warning("[VLA] Frame must be 3D numpy array, got: %s", type(frame))
-            return "STOP"
-
-        # Circuit breaker check
-        current_time = time.monotonic()
-        if self._circuit_open:
-            if current_time - self._last_failure_time > self._circuit_timeout:
-                log.info("[VLA] Circuit breaker reset - attempting reconnection")
-                self._circuit_open = False
-                self._failure_count = 0
-            else:
-                log.debug("[VLA] Circuit breaker open - returning STOP")
-                return "STOP"
-
-        # Check cache first
+        if self._last_analyzed_frame is None:
+            return True
+            
         try:
-            frame_hash = self._compute_frame_hash(frame)
+            # 1. Prepare small grayscale versions (64x64 is plenty for change detection)
+            curr_small = cv2.cvtColor(cv2.resize(frame, (64, 64)), cv2.COLOR_BGR2GRAY)
+            last_small = cv2.cvtColor(cv2.resize(self._last_analyzed_frame, (64, 64)), cv2.COLOR_BGR2GRAY)
+            
+            # 2. Calculate Mean Squared Error (MSE)
+            diff = cv2.absdiff(curr_small, last_small)
+            mse = np.mean(diff)
+            
+            # log.debug("[VLA] Frame diff MSE: %.2f", mse)
+            return mse > _DIFF_THRESHOLD
+            
         except Exception as exc:
-            log.warning("[VLA] Frame hash computation failed: %s", exc)
-            return "STOP"
+            log.warning("[VLA] Change detection failed: %s", exc)
+            return True
 
-        if frame_hash in self._cache:
-            cached_intent, timestamp = self._cache[frame_hash]
-            if current_time - timestamp < _CACHE_DURATION_S:
-                log.debug("[VLA] Cache hit for frame hash %s -> %s", frame_hash[:8], cached_intent)
-                return cached_intent
-
-        # Clean expired cache entries (keep cache size manageable)
-        try:
-            self._cache = {
-                h: (intent, ts) for h, (intent, ts) in self._cache.items()
-                if current_time - ts < _CACHE_DURATION_S * 2
-            }
-        except Exception as exc:
-            log.warning("[VLA] Cache cleanup failed: %s", exc)
-            self._cache.clear()  # Clear corrupt cache
-
-        # Optimize frame size for faster processing
+    def get_response(self, frame: np.ndarray) -> Dict[str, Any]:
+        """
+        Sends frame to Gemma 4 and returns parsed JSON response.
+        """
+        self._last_analyzed_frame = frame.copy()
+        
         try:
             optimized_frame = self._optimize_frame(frame)
             img_b64 = self._encode_frame(optimized_frame)
-            if img_b64 is None:
-                self._record_failure("Frame encoding failed")
-                return "STOP"
+            if not img_b64:
+                return self._fallback("I failed to process the image.")
         except Exception as exc:
-            self._record_failure(f"Frame processing failed: {exc}")
-            return "STOP"
+            log.error("[VLA] Image preparation failed: %s", exc)
+            return self._fallback("Internal image error.")
 
         payload = {
             "model":  self.model,
             "prompt": _PROMPT,
             "images": [img_b64],
+            "format": "json",
             "stream": False,
+            "options": {"temperature": 0.2}
         }
 
         t0 = time.monotonic()
         try:
             resp = self._session.post(self.url, json=payload, timeout=_TIMEOUT_S)
             resp.raise_for_status()
-            raw = resp.json().get("response", "").strip().upper()
-
-            # Reset failure count on success
-            self._failure_count = 0
-
-        except requests.exceptions.Timeout:
-            self._record_failure(f"Request timed out (>{_TIMEOUT_S}s)")
-            return "STOP"
-        except requests.exceptions.ConnectionError as exc:
-            self._record_failure(f"Connection error: {exc}")
-            return "STOP"
+            raw = resp.json().get("response", "").strip()
         except Exception as exc:
-            self._record_failure(f"Request failed: {exc}")
-            return "STOP"
+            log.error("[VLA] Ollama request failed: %s", exc)
+            return self._fallback("I couldn't reach my vision model.")
 
         elapsed = time.monotonic() - t0
+        log.debug("[VLA] Response in %.2fs: %s", elapsed, raw[:100])
+        
+        return self._parse_json(raw)
 
-        # Parse and validate response
+    def _parse_json(self, raw: str) -> Dict[str, Any]:
+        raw = re.sub(r"```(?:json)?", "", raw).strip()
+        if not (raw.startswith("{") and raw.endswith("}")):
+            match = re.search(r"\{.*\}", raw, re.DOTALL)
+            if match: raw = match.group()
+
         try:
-            token = raw.split()[0] if raw.split() else "STOP"
-            intent = token if token in _VALID_INTENTS else "STOP"
-
-            if intent == "STOP" and token != "STOP":
-                log.warning("[VLA] Invalid response token '%s', defaulting to STOP", token)
-
-        except Exception as exc:
-            log.warning("[VLA] Response parsing failed: %s", exc)
-            intent = "STOP"
-
-        # Cache the result
-        try:
-            self._cache[frame_hash] = (intent, current_time)
-        except Exception as exc:
-            log.warning("[VLA] Failed to cache result: %s", exc)
-
-        log.debug("[VLA] raw=%r  intent=%s  (%.2fs)", raw, intent, elapsed)
-        print(f"[VLA] intent={intent}  raw={raw!r}  ({elapsed:.2f}s)")
-        return intent
-
-    def _record_failure(self, error_msg: str) -> None:
-        """Record a failure for circuit breaker pattern."""
-        self._failure_count += 1
-        self._last_failure_time = time.monotonic()
-
-        log.warning("[VLA] %s (failure %d/%d)", error_msg, self._failure_count, self._max_failures)
-
-        if self._failure_count >= self._max_failures:
-            self._circuit_open = True
-            log.warning("[VLA] Circuit breaker opened - too many failures")
-
-    def is_ollama_running(self) -> bool:
-        """Quick health-check. Returns True if Ollama is reachable."""
-        try:
-            r = requests.get("http://localhost:11434/", timeout=2)
-            return r.status_code == 200
+            return json.loads(raw)
         except Exception:
-            return False
+            log.warning("[VLA] Failed to parse JSON: %s", raw)
+            return self._fallback("I had trouble describing what I saw.")
 
-    # ── Private helpers ────────────────────────────────────────────────────────
+    def _fallback(self, speech: str) -> Dict[str, Any]:
+        return {"speech": speech, "actions": []}
 
     def _optimize_frame(self, frame: np.ndarray) -> np.ndarray:
-        """Resize frame if needed for faster processing."""
         h, w = frame.shape[:2]
         if max(h, w) > _FRAME_RESIZE_MAX:
             scale = _FRAME_RESIZE_MAX / max(h, w)
-            new_w, new_h = int(w * scale), int(h * scale)
-            return cv2.resize(frame, (new_w, new_h), interpolation=cv2.INTER_LINEAR)
+            return cv2.resize(frame, (int(w * scale), int(h * scale)))
         return frame
 
     @staticmethod
     def _encode_frame(frame: np.ndarray) -> Optional[str]:
-        """JPEG-encode a BGR frame and return a base-64 string."""
-        try:
-            ok, buf = cv2.imencode(
-                ".jpg", frame, [cv2.IMWRITE_JPEG_QUALITY, _JPEG_QUALITY]
-            )
-            if not ok:
-                return None
-            return base64.b64encode(buf).decode("utf-8")
-        except Exception as exc:
-            log.error("[VLA] Frame encode failed: %s", exc)
-            return None
+        ok, buf = cv2.imencode(".jpg", frame, [cv2.IMWRITE_JPEG_QUALITY, _JPEG_QUALITY])
+        return base64.b64encode(buf).decode("utf-8") if ok else None
+
+# ── Legacy VLA (Commented Out) ────────────────────────────────────────────────
+"""
+_VALID_INTENTS = frozenset({"FOLLOW", "SEARCH", "STOP", "AVOID"})
+
+class VLAProcessor:
+    def __init__(self, ollama_url: str = _OLLAMA_URL, model: str = "moondream") -> None:
+        self.url = ollama_url
+        self.model = model
+        self._session = requests.Session()
+
+    def get_intent(self, frame: np.ndarray) -> str:
+        # ... logic for single-word navigation ...
+        return "STOP"
+"""
+
