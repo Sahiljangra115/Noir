@@ -38,7 +38,7 @@
 // ─── WiFi / server config ─────────────────────────────────────────────────────
 const char* WIFI_SSID  = "16x2=8";          // ← edit
 const char* WIFI_PASS  = "Sahil#115";       // ← edit
-const char* SERVER_IP  = "192.168.144.124";            // ← laptop's IP on LAN
+const char* SERVER_IP  = "192.168.202.124";            // ← laptop's IP on LAN
 const uint16_t SERVER_PORT = 9999;
 
 // ─── Motor pin definitions (L298N) ───────────────────────────────────────────
