@@ -28,7 +28,7 @@ class _SettingsScreenState extends State<SettingsScreen> {
     return Consumer<SocketService>(
       builder: (context, socket, child) {
         final accentColor = Theme.of(context).colorScheme.primary;
-        
+
         return Scaffold(
           extendBody: true,
           extendBodyBehindAppBar: true,
@@ -50,10 +50,7 @@ class _SettingsScreenState extends State<SettingsScreen> {
                   crossAxisAlignment: CrossAxisAlignment.start,
                   children: [
                     const SizedBox(height: 20),
-                    const Text(
-                      'CONNECTIVITY', 
-                      style: TextStyle(color: Colors.white24, fontSize: 10, letterSpacing: 2)
-                    ),
+                    const Text('CONNECTIVITY', style: TextStyle(color: Colors.white24, fontSize: 10, letterSpacing: 2)),
                     const SizedBox(height: 16),
                     GlassCard(
                       padding: const EdgeInsets.all(24),
@@ -118,30 +115,22 @@ class _SettingsScreenState extends State<SettingsScreen> {
                           opacity: 0.1,
                           child: Center(
                             child: Text(
-                              'SYNCHRONIZE', 
-                              style: TextStyle(
-                                color: accentColor, 
-                                fontWeight: FontWeight.bold, 
-                                letterSpacing: 2,
-                                fontSize: 13
-                              )
+                              'SYNCHRONIZE',
+                              style: TextStyle(color: accentColor, fontWeight: FontWeight.bold, letterSpacing: 2, fontSize: 13),
                             ),
                           ),
                         ),
                       ),
                     ),
                     const SizedBox(height: 40),
-                    const Text(
-                      'MODEL INFO', 
-                      style: TextStyle(color: Colors.white24, fontSize: 10, letterSpacing: 2)
-                    ),
+                    const Text('MODEL INFO', style: TextStyle(color: Colors.white24, fontSize: 10, letterSpacing: 2)),
                     const SizedBox(height: 16),
                     GlassCard(
                       padding: const EdgeInsets.all(20),
                       borderRadius: 20,
                       child: Row(
                         children: [
-                          Icon(Icons.Psychology_outlined, color: accentColor.withOpacity(0.5)),
+                          Icon(Icons.psychology_outlined, color: accentColor.withOpacity(0.5)),
                           const SizedBox(width: 16),
                           const Column(
                             crossAxisAlignment: CrossAxisAlignment.start,
@@ -169,7 +158,7 @@ class _SettingsScreenState extends State<SettingsScreen> {
             },
           ),
         );
-      }
+      },
     );
   }
 

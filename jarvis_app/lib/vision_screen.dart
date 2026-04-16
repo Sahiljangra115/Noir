@@ -48,13 +48,13 @@ class VisionScreen extends StatelessWidget {
                       mainAxisAlignment: MainAxisAlignment.spaceBetween,
                       children: [
                         const Text(
-                          'TELEMETRY FEED', 
+                          'TELEMETRY FEED',
                           style: TextStyle(
-                            color: Colors.white24, 
-                            fontSize: 10, 
+                            color: Colors.white24,
+                            fontSize: 10,
                             letterSpacing: 2,
-                            fontWeight: FontWeight.w200
-                          )
+                            fontWeight: FontWeight.w200,
+                          ),
                         ),
                         Container(
                           padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 4),
@@ -63,8 +63,8 @@ class VisionScreen extends StatelessWidget {
                             borderRadius: BorderRadius.circular(20),
                             border: Border.all(
                               color: (socket.isConnected ? accentColor : Colors.red).withOpacity(0.2),
-                              width: 0.5
-                            )
+                              width: 0.5,
+                            ),
                           ),
                           child: Row(
                             children: [
@@ -80,10 +80,10 @@ class VisionScreen extends StatelessWidget {
                               Text(
                                 socket.isConnected ? 'LIVE' : 'OFFLINE',
                                 style: TextStyle(
-                                  color: socket.isConnected ? accentColor : Colors.red, 
-                                  fontSize: 9, 
+                                  color: socket.isConnected ? accentColor : Colors.red,
+                                  fontSize: 9,
                                   fontWeight: FontWeight.bold,
-                                  letterSpacing: 1
+                                  letterSpacing: 1,
                                 ),
                               ),
                             ],
@@ -97,18 +97,18 @@ class VisionScreen extends StatelessWidget {
                       child: Column(
                         children: [
                           _buildTelemetryItem(
-                            'IMU ORIENTATION', 
+                            'IMU ORIENTATION',
                             'X: ${accelX.toStringAsFixed(2)}  Y: ${accelY.toStringAsFixed(2)}  Z: ${accelZ.toStringAsFixed(2)}',
-                            Icons.explore_outlined
+                            Icons.explore_outlined,
                           ),
                           const Padding(
                             padding: EdgeInsets.symmetric(vertical: 20),
                             child: Divider(color: Colors.white10, height: 1),
                           ),
                           _buildTelemetryItem(
-                            'GPS COORDINATES', 
+                            'GPS COORDINATES',
                             'LAT: ${gpsLat.toStringAsFixed(4)}  LON: ${gpsLon.toStringAsFixed(4)}',
-                            Icons.location_on_outlined
+                            Icons.location_on_outlined,
                           ),
                         ],
                       ),
@@ -120,21 +120,21 @@ class VisionScreen extends StatelessWidget {
                           Icon(Icons.videocam_off_outlined, color: Colors.white.withOpacity(0.15), size: 48),
                           const SizedBox(height: 16),
                           Text(
-                            'ENCRYPTED VIDEO LINK STANDBY', 
+                            'ENCRYPTED VIDEO LINK STANDBY',
                             style: TextStyle(
                               color: Colors.white.withOpacity(0.15),
-                              fontSize: 10, 
+                              fontSize: 10,
                               letterSpacing: 2,
-                              fontWeight: FontWeight.w200
-                            )
+                              fontWeight: FontWeight.w200,
+                            ),
                           ),
                           const SizedBox(height: 4),
                           Text(
-                            'Optimizing bandwidth for VLA processing', 
+                            'Optimizing bandwidth for VLA processing',
                             style: TextStyle(
                               color: Colors.white.withOpacity(0.1),
-                              fontSize: 9, 
-                            )
+                              fontSize: 9,
+                            ),
                           ),
                         ],
                       ),
@@ -155,7 +155,7 @@ class VisionScreen extends StatelessWidget {
             },
           ),
         );
-      }
+      },
     );
   }
 
@@ -175,13 +175,13 @@ class VisionScreen extends StatelessWidget {
             Text(label, style: const TextStyle(color: Colors.white38, fontSize: 9, letterSpacing: 1.5)),
             const SizedBox(height: 6),
             Text(
-              value, 
+              value,
               style: const TextStyle(
-                color: Colors.white, 
-                fontSize: 15, 
-                fontFamily: 'monospace', 
-                fontWeight: FontWeight.w300
-              )
+                color: Colors.white,
+                fontSize: 15,
+                fontFamily: 'monospace',
+                fontWeight: FontWeight.w300,
+              ),
             ),
           ],
         ),

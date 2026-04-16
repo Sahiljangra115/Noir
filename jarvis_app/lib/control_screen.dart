@@ -11,7 +11,7 @@ class ControlScreen extends StatelessWidget {
     return Consumer<SocketService>(
       builder: (context, socket, child) {
         final accentColor = Theme.of(context).colorScheme.primary;
-        
+
         return Scaffold(
           extendBody: true,
           extendBodyBehindAppBar: true,
@@ -41,15 +41,13 @@ class ControlScreen extends StatelessWidget {
                     _buildControlPad(socket, accentColor),
                     const Spacer(),
                     Text(
-                      socket.isConnected ? 'REMOTE LINK ACTIVE' : 'REMOTE LINK OFFLINE', 
+                      socket.isConnected ? 'REMOTE LINK ACTIVE' : 'REMOTE LINK OFFLINE',
                       style: TextStyle(
-                        color: socket.isConnected
-                            ? Colors.white.withOpacity(0.1)
-                            : Colors.redAccent.withOpacity(0.6), 
-                        fontSize: 10, 
+                        color: socket.isConnected ? Colors.white.withOpacity(0.1) : Colors.redAccent.withOpacity(0.6),
+                        fontSize: 10,
                         fontWeight: FontWeight.w200,
-                        letterSpacing: 4
-                      )
+                        letterSpacing: 4,
+                      ),
                     ),
                     const SizedBox(height: 120),
                   ],
@@ -66,7 +64,7 @@ class ControlScreen extends StatelessWidget {
             },
           ),
         );
-      }
+      },
     );
   }
 
@@ -83,12 +81,16 @@ class ControlScreen extends StatelessWidget {
           color: Colors.white,
           fontSize: 14,
           fontWeight: FontWeight.w300,
-          letterSpacing: 2
+          letterSpacing: 2,
         ),
-        items: modes.map((m) => DropdownMenuItem(
-          value: m,
-          child: Text(m),
-        )).toList(),
+        items: modes
+            .map(
+              (m) => DropdownMenuItem(
+                value: m,
+                child: Text(m),
+              ),
+            )
+            .toList(),
         onChanged: (val) {
           if (val != null) socket.sendCommand('mode', val);
         },
@@ -131,8 +133,8 @@ class ControlScreen extends StatelessWidget {
           height: 80,
           alignment: Alignment.center,
           child: Icon(
-            icon, 
-            color: color.withOpacity(0.8), 
+            icon,
+            color: color.withOpacity(0.8),
             size: 36,
             shadows: [
               Shadow(
