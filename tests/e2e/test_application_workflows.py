@@ -93,7 +93,7 @@ class TestCompleteWorkflows:
             pipeline._conversation_cycle()
 
             # Verify the complete workflow
-            voice['wakeword'].wait_for_wakeword.assert_called_once()
+            # wait_for_wakeword is NOT called in _conversation_cycle, it's called in _loop
             voice['stt'].listen.assert_called_once()
             voice['llm'].parse.assert_called_once()
             voice['tts'].speak.assert_called()

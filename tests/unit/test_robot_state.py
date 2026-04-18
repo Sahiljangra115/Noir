@@ -22,6 +22,7 @@ class TestRobotState:
         assert state.jarvis_response == ""
         assert state.imu == {}
         assert state.gps == {}
+        assert state.ptt_active is False
 
     def test_mode_property_thread_safety(self):
         """Test mode property thread safety."""
@@ -71,13 +72,15 @@ class TestRobotState:
         expected = {
             "mode": "HUMAN",
             "last_cmd": "F",
-            "goto_target": None,  # Added missing field
+            "goto_target": None,
             "phone_connected": True,
             "yolo_info": "person detected",
             "last_heard": "follow me",
             "jarvis_response": "Following you",
             "imu": {"accel": {"x": 0.1, "y": 0.2, "z": 9.8}},
-            "gps": {"lat": 40.7128, "lon": -74.0060}
+            "gps": {"lat": 40.7128, "lon": -74.0060},
+            "camera_device": "",
+            "ptt_active": False,
         }
 
         assert snapshot == expected
@@ -138,8 +141,6 @@ class TestRobotState:
         # Modify the retrieved copy
         retrieved_imu["accel"]["x"] = 999.0
 
-        # The getter returns a shallow copy, so nested objects are still shared
-        # This is the actual behavior - the test should reflect reality
-        # In a real fix, we'd need deep copy for full isolation
-        assert state.imu["accel"]["x"] == 999.0  # Shared reference to nested dict
-        assert state.imu is not retrieved_imu     # Different dict objects
+        # With deepcopy, nested objects are isolated
+        assert state.imu["accel"]["x"] == 1.0
+        assert state.imu is not retrieved_imu

@@ -82,11 +82,15 @@ class TestRobotComms:
         result = RobotComms.from_human_bbox(bbox_small, frame_w, frame_h, rotate_deg=0)
         assert result == "F"
 
+    @patch('backend.esp32.robot_comms.select.select')
     @patch('socket.socket')
-    def test_send_command_when_connected(self, mock_socket_class):
+    def test_send_command_when_connected(self, mock_socket_class, mock_select):
         """Test sending commands when socket is connected."""
         mock_socket = MagicMock()
         mock_socket_class.return_value = mock_socket
+        
+        # Mock select.select to return the mock socket as ready for writing
+        mock_select.return_value = ([], [mock_socket], [])
 
         comms = RobotComms()
         comms._client = mock_socket  # Simulate connected state
