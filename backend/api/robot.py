@@ -3,6 +3,7 @@ from typing import Any, Dict
 from pydantic import BaseModel, ValidationError
 import json
 import os
+import hmac
 from functools import wraps
 from dotenv import load_dotenv
 
@@ -24,8 +25,12 @@ def require_auth(f):
     @wraps(f)
     def decorated(*args, **kwargs):
         token = request.headers.get('Authorization')
-        expected = os.getenv('JARVIS_SECRET_KEY', 'jarvis-robot-secret')
-        if not token or token != f"Bearer {expected}":
+        expected = os.getenv('JARVIS_SECRET_KEY')
+        if not expected:
+            return jsonify({"status": "error", "msg": "Server auth misconfigured"}), 503
+        if not token:
+            return jsonify({"status": "error", "msg": "Unauthorized"}), 401
+        if not hmac.compare_digest(token, f"Bearer {expected}"):
             return jsonify({"status": "error", "msg": "Unauthorized"}), 401
         return f(*args, **kwargs)
     return decorated
@@ -48,7 +53,10 @@ def robot_command():
     except ValidationError as e:
         return jsonify({"error": "Validation error", "details": json.loads(e.json())}), 400
     try:
-        _command_queue.put(data)
+        if hasattr(_command_queue, "push"):
+            _command_queue.push(data)
+        else:
+            _command_queue.put(data)
     except Exception as e:
         return jsonify({"error": str(e)}), 500
     return jsonify({"status": "queued"})
@@ -65,5 +73,6 @@ def robot_state_():
     return jsonify({"state": state_snapshot})
 
 @robot_api.route("/api/llm/query", methods=["POST"])
+@require_auth
 def llm_query():
     return jsonify({"error": "Not implemented"}), 501

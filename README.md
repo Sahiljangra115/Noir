@@ -47,7 +47,7 @@ JARVIS is a multi-modal autonomous robot assistant that combines Speech-to-Text 
    ```
 
 ## 🔒 Security Note
-Version 0.2.0 introduces mandatory token-based authentication. Ensure that all clients (mobile app, scripts) include the `Authorization: Bearer <your_key>` header for REST calls or provide the token during the SocketIO connection handshake.
+Version 0.2.0 introduces mandatory token-based authentication. REST clients must include `Authorization: Bearer <your_key>`. SocketIO clients must provide a raw `token` during the connection handshake (`auth` dict or query param).
 
 ## 📄 Documentation
 - `ARCHITECTURE.md`: Detailed system design and flow.

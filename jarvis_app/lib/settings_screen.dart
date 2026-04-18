@@ -1,6 +1,7 @@
 import 'package:flutter/material.dart';
-import 'package:shared_preferences/shared_preferences.dart';
 import 'package:provider/provider.dart';
+import 'package:shared_preferences/shared_preferences.dart';
+import 'widgets/ios_widgets.dart';
 import 'services/socket_service.dart';
 
 class SettingsScreen extends StatefulWidget {
@@ -11,99 +12,188 @@ class SettingsScreen extends StatefulWidget {
 }
 
 class _SettingsScreenState extends State<SettingsScreen> {
-  final TextEditingController _ipController = TextEditingController();
-  final TextEditingController _portController = TextEditingController();
+  final _hostController = TextEditingController();
+  final _tokenController = TextEditingController();
 
   @override
   void initState() {
     super.initState();
-    _loadSettings();
-  }
-
-  Future<void> _loadSettings() async {
-    final prefs = await SharedPreferences.getInstance();
-    setState(() {
-      _ipController.text = prefs.getString('laptop_ip') ?? '192.168.1.100';
-      _portController.text = prefs.getString('laptop_port') ?? '5000';
-    });
-  }
-
-  Future<void> _saveSettings() async {
-    final prefs = await SharedPreferences.getInstance();
-    await prefs.setString('laptop_ip', _ipController.text);
-    await prefs.setString('laptop_port', _portController.text);
-    
-    if (mounted) {
-      final url = 'http://${_ipController.text}:${_portController.text}';
-      context.read<SocketService>().connect(url);
-      ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(content: Text('Connecting to JARVIS Core...')),
-      );
-    }
+    final socket = Provider.of<SocketService>(context, listen: false);
+    _hostController.text = socket.host;
+    _tokenController.text = socket.token;
   }
 
   @override
   Widget build(BuildContext context) {
-    return Scaffold(
-      appBar: AppBar(title: const Text('S Y S T E M')),
-      body: Padding(
-        padding: const EdgeInsets.all(24.0),
-        child: Column(
-          crossAxisAlignment: CrossAxisAlignment.stretch,
-          children: [
-            const Text('CONNECTION', style: TextStyle(color: Colors.white24, fontSize: 10, letterSpacing: 2)),
-            const SizedBox(height: 24),
-            _buildTextField('Laptop IP Address', _ipController),
-            const SizedBox(height: 16),
-            _buildTextField('Port', _portController),
-            const SizedBox(height: 32),
-            ElevatedButton(
-              style: ElevatedButton.styleFrom(
-                backgroundColor: const Color(0xFF00E5FF).withOpacity(0.1),
-                foregroundColor: const Color(0xFF00E5FF),
-                padding: const EdgeInsets.symmetric(vertical: 16),
-                shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
+    return Consumer<SocketService>(
+      builder: (context, socket, child) {
+        final accentColor = Theme.of(context).colorScheme.primary;
+        
+        return Scaffold(
+          extendBody: true,
+          extendBodyBehindAppBar: true,
+          appBar: AppBar(title: const Text('S Y S T E M')),
+          body: Container(
+            width: double.infinity,
+            height: double.infinity,
+            decoration: const BoxDecoration(
+              gradient: RadialGradient(
+                colors: [Color(0xFF0A1A24), Color(0xFF000000)],
+                center: Alignment.center,
+                radius: 1.2,
               ),
-              onPressed: _saveSettings,
-              child: const Text('LINK TO CORE', style: TextStyle(letterSpacing: 2, fontWeight: FontWeight.bold)),
             ),
-            const Spacer(),
-            const Center(
-              child: Text('VERSION 1.0.0 ALPHA', style: TextStyle(color: Colors.white10, fontSize: 8, letterSpacing: 2)),
+            child: SafeArea(
+              child: SingleChildScrollView(
+                padding: const EdgeInsets.symmetric(horizontal: 24.0),
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    const SizedBox(height: 20),
+                    const Text(
+                      'CONNECTIVITY', 
+                      style: TextStyle(color: Colors.white24, fontSize: 10, letterSpacing: 2)
+                    ),
+                    const SizedBox(height: 16),
+                    GlassCard(
+                      padding: const EdgeInsets.all(24),
+                      child: Column(
+                        children: [
+                          _buildTextField('BRAIN IP ADDRESS', _hostController, Icons.lan_outlined, accentColor),
+                          const Padding(
+                            padding: EdgeInsets.symmetric(vertical: 20),
+                            child: Divider(color: Colors.white10, height: 1),
+                          ),
+                          _buildTextField('ACCESS TOKEN', _tokenController, Icons.vpn_key_outlined, accentColor, isSecret: true),
+                        ],
+                      ),
+                    ),
+                    const SizedBox(height: 32),
+                    SizedBox(
+                      width: double.infinity,
+                      height: 56,
+                      child: GestureDetector(
+                        onTap: () async {
+                          final host = _hostController.text.trim();
+                          final token = _tokenController.text.trim();
+
+                          if (host.isEmpty || !host.startsWith('http')) {
+                            if (!context.mounted) return;
+                            ScaffoldMessenger.of(context).showSnackBar(
+                              const SnackBar(
+                                content: Text('Enter a valid host, e.g. http://192.168.1.10:5000'),
+                                backgroundColor: Colors.redAccent,
+                              ),
+                            );
+                            return;
+                          }
+
+                          if (token.isEmpty) {
+                            if (!context.mounted) return;
+                            ScaffoldMessenger.of(context).showSnackBar(
+                              const SnackBar(
+                                content: Text('Access token is required.'),
+                                backgroundColor: Colors.redAccent,
+                              ),
+                            );
+                            return;
+                          }
+
+                          final prefs = await SharedPreferences.getInstance();
+                          await prefs.setString('jarvis_host', host);
+                          await prefs.setString('jarvis_token', token);
+
+                          socket.updateConfig(host, token);
+                          if (!context.mounted) return;
+                          ScaffoldMessenger.of(context).showSnackBar(
+                            const SnackBar(
+                              content: Text('System configuration synchronized.'),
+                              backgroundColor: Colors.blueGrey,
+                            ),
+                          );
+                        },
+                        child: GlassCard(
+                          padding: EdgeInsets.zero,
+                          borderRadius: 16,
+                          opacity: 0.1,
+                          child: Center(
+                            child: Text(
+                              'SYNCHRONIZE', 
+                              style: TextStyle(
+                                color: accentColor, 
+                                fontWeight: FontWeight.bold, 
+                                letterSpacing: 2,
+                                fontSize: 13
+                              )
+                            ),
+                          ),
+                        ),
+                      ),
+                    ),
+                    const SizedBox(height: 40),
+                    const Text(
+                      'MODEL INFO', 
+                      style: TextStyle(color: Colors.white24, fontSize: 10, letterSpacing: 2)
+                    ),
+                    const SizedBox(height: 16),
+                    GlassCard(
+                      padding: const EdgeInsets.all(20),
+                      borderRadius: 20,
+                      child: Row(
+                        children: [
+                          Icon(Icons.Psychology_outlined, color: accentColor.withOpacity(0.5)),
+                          const SizedBox(width: 16),
+                          const Column(
+                            crossAxisAlignment: CrossAxisAlignment.start,
+                            children: [
+                              Text('VLA ENGINE', style: TextStyle(color: Colors.white38, fontSize: 9, letterSpacing: 1)),
+                              SizedBox(height: 4),
+                              Text('Gemma 4 (System Optimized)', style: TextStyle(color: Colors.white, fontSize: 13)),
+                            ],
+                          ),
+                        ],
+                      ),
+                    ),
+                    const SizedBox(height: 150),
+                  ],
+                ),
+              ),
             ),
-          ],
-        ),
-      ),
-      bottomNavigationBar: BottomNavigationBar(
-        currentIndex: 3,
-        onTap: (index) {
-          if (index == 0) Navigator.pushReplacementNamed(context, '/');
-          if (index == 1) Navigator.pushReplacementNamed(context, '/control');
-          if (index == 2) Navigator.pushReplacementNamed(context, '/vision');
-        },
-        items: const [
-          BottomNavigationBarItem(icon: Icon(Icons.blur_on), label: 'CORE'),
-          BottomNavigationBarItem(icon: Icon(Icons.gamepad), label: 'CONTROL'),
-          BottomNavigationBarItem(icon: Icon(Icons.visibility), label: 'VISION'),
-          BottomNavigationBarItem(icon: Icon(Icons.settings), label: 'SYSTEM'),
-        ],
-      ),
+          ),
+          bottomNavigationBar: FloatingNav(
+            currentIndex: 3,
+            onTap: (index) {
+              if (index == 0) Navigator.pushReplacementNamed(context, '/');
+              if (index == 1) Navigator.pushReplacementNamed(context, '/control');
+              if (index == 2) Navigator.pushReplacementNamed(context, '/vision');
+            },
+          ),
+        );
+      }
     );
   }
 
-  Widget _buildTextField(String label, TextEditingController controller) {
+  @override
+  void dispose() {
+    _hostController.dispose();
+    _tokenController.dispose();
+    super.dispose();
+  }
+
+  Widget _buildTextField(String label, TextEditingController controller, IconData icon, Color accent, {bool isSecret = false}) {
     return Column(
       crossAxisAlignment: CrossAxisAlignment.start,
       children: [
-        Text(label, style: const TextStyle(color: Colors.white38, fontSize: 10)),
-        const SizedBox(height: 8),
+        Text(label, style: const TextStyle(color: Colors.white30, fontSize: 9, letterSpacing: 1.5)),
         TextField(
           controller: controller,
-          style: const TextStyle(color: Colors.white, fontSize: 16, fontFamily: 'monospace'),
+          obscureText: isSecret,
+          style: const TextStyle(color: Colors.white, fontSize: 15, fontWeight: FontWeight.w300),
           decoration: InputDecoration(
-            filled: true,
-            fillColor: Colors.white.withOpacity(0.03),
-            border: OutlineInputBorder(borderRadius: BorderRadius.circular(12), borderSide: BorderSide.none),
+            border: InputBorder.none,
+            icon: Icon(icon, color: Colors.white24, size: 20),
+            hintText: 'Enter value...',
+            hintStyle: TextStyle(color: Colors.white.withOpacity(0.1), fontSize: 14),
           ),
         ),
       ],

@@ -7,26 +7,63 @@ class SocketService extends ChangeNotifier {
   IO.Socket? _socket;
   RobotState _state = RobotState.initial();
   bool _isConnected = false;
+  String? _connectionError;
+  
+  String _host = 'http://localhost:5000';
+  String _token = '';
 
   RobotState get state => _state;
   bool get isConnected => _isConnected;
+  String? get connectionError => _connectionError;
+  String get host => _host;
+  String get token => _token;
 
-  void connect(String url) {
+  void updateConfig(String newHost, String newToken) {
+    _host = newHost;
+    _token = newToken;
+    connect(_host, token: _token);
+    notifyListeners();
+  }
+
+  void connect(String url, {String? token}) {
+    _host = url;
+    _token = token ?? '';
     _socket?.dispose();
+
+    final handshakeToken = _token.trim();
     
     _socket = IO.io(url, IO.OptionBuilder()
         .setTransports(['websocket'])
+        .setAuth({'token': handshakeToken}) // For SocketIO 4+ handshake
+        .setQuery({'token': handshakeToken}) // Fallback for some configurations
         .enableAutoConnect()
         .build());
 
     _socket?.onConnect((_) {
       _isConnected = true;
+      _connectionError = null;
       notifyListeners();
+      print('Connected to JARVIS Core');
+    });
+
+    _socket?.onConnectError((data) {
+      _isConnected = false;
+      _connectionError = data.toString();
+      notifyListeners();
+      print('Connection Error: $data');
+    });
+
+    _socket?.onConnectTimeout((data) {
+      _isConnected = false;
+      _connectionError = 'Connection Timeout';
+      notifyListeners();
+      print('Connection Timeout');
     });
 
     _socket?.onDisconnect((_) {
       _isConnected = false;
       notifyListeners();
+      print('Disconnected from JARVIS Core');
     });
 
     _socket?.on('state_update', (data) {
@@ -53,7 +90,11 @@ class SocketService extends ChangeNotifier {
 
   void sendCommand(String type, dynamic value) {
     if (_isConnected) {
-      _socket?.emit('command', {'type': type, 'value': value});
+      if (type == 'mode') {
+        _socket?.emit('command', {'type': 'mode', 'value': value});
+      } else if (type == 'move') {
+        _socket?.emit('command', {'type': 'move', 'cmd': value, 'duration': 1.0});
+      }
     }
   }
 

@@ -39,6 +39,7 @@ import logging
 import sys
 import time
 import os
+import threading
 from typing import Optional
 from collections import deque
 
@@ -53,7 +54,7 @@ load_dotenv()
 from backend.services.robot_state import RobotState
 from backend.services.voice_pipeline import VoicePipeline
 from backend.esp32.robot_comms import RobotComms
-from vision_processor        import VLAProcessor
+from vision_processor        import GemmaVLAProcessor
 from web_server              import WebServer
 from utils.cv_text           import draw_text, draw_detection_box
 
@@ -76,12 +77,21 @@ logging.basicConfig(
 )
 log = logging.getLogger(__name__)
 
-# ── Mode constants ────────────────────────────────────────────────────────────
-MODE_LFR    = "LFR"
-MODE_HUMAN  = "HUMAN_TRACK"
-MODE_VLA    = "VLA"
-MODE_MANUAL = "MANUAL"
-MODE_IDLE   = "IDLE"
+from enum import Enum, auto
+
+class RobotMode(Enum):
+    LFR         = "LFR"
+    HUMAN_TRACK = "HUMAN_TRACK"
+    VLA         = "VLA"
+    MANUAL      = "MANUAL"
+    IDLE        = "IDLE"
+
+# Keep these for compatibility if they are used elsewhere by name
+MODE_LFR    = RobotMode.LFR.value
+MODE_HUMAN  = RobotMode.HUMAN_TRACK.value
+MODE_VLA    = RobotMode.VLA.value
+MODE_MANUAL = RobotMode.MANUAL.value
+MODE_IDLE   = RobotMode.IDLE.value
 
 # ── Timing ────────────────────────────────────────────────────────────────────
 LOOP_SLEEP_S = 0.05   # 20 fps cap
@@ -123,7 +133,7 @@ class RobotBrain:
         web_port:  int  = 5000,
         use_socket: bool = True,
         use_web:    bool = True,
-        vla_model:  str  = "moondream",
+        vla_model:  str  = "gemma4-e2b-nothink:latest",
         wake_sens:  float = 0.6,
         stt_threshold: int = 850,
     ) -> None:
@@ -141,7 +151,12 @@ class RobotBrain:
         self.human_det = HumanDetector()
         self.line_det  = HybridLineFollower()  # Uses ML (if present) and falls back to OpenCV
         self.ema       = EMATracker()
-        self.vla       = VLAProcessor(model=vla_model)
+        self.vla       = GemmaVLAProcessor(model=vla_model)
+
+        # ── Async VLA state for non-blocking inference ──────────────────
+        self._vla_lock = threading.Lock()
+        self._vla_busy = False
+        self._last_vla_resp = {"speech": "", "actions": []}
 
         # ── Web server (Flask-SocketIO) ────────────────────────────────────
         self._web = WebServer(
@@ -282,33 +297,60 @@ class RobotBrain:
             return "S", frame
 
     def _run_vla(self, frame: np.ndarray) -> tuple[str, np.ndarray]:
-        """VLA mode with error handling and graceful degradation."""
+        """Gemma-powered VLA mode with async inference and change detection."""
         try:
-            now = time.monotonic()
-            if now - self._last_vla >= VLA_QUERY_S:
-                try:
-                    self._last_intent = self.vla.get_intent(frame)
-                    self._last_vla = now
-                except Exception as exc:
-                    log.warning("[BRAIN] VLA query failed: %s", exc)
-                    # Keep last known intent, don't crash
+            # 1. Check for significant visual change to trigger new analysis
+            if not self._vla_busy and self.vla.has_significant_change(frame):
+                self._vla_busy = True
+                # Trigger async inference to prevent blocking the main loop
+                threading.Thread(
+                    target=self._vla_inference_task, 
+                    args=(frame.copy(),), 
+                    daemon=True
+                ).start()
 
-            cmd = RobotComms.from_intent(self._last_intent)
-            ttl = max(0.0, VLA_QUERY_S - (now - self._last_vla))
-            draw_text(
-                frame, f"Intent: {self._last_intent}  (next in {ttl:.1f}s)",
-                (10, 60), size=0.7, color=_CLR_BLUE
-            )
+            # 2. Determine command from the latest VLA response
+            cmd = "S" # Default stop if no actions
+            with self._vla_lock:
+                if self._last_vla_resp.get("actions"):
+                    # Use the first movement action if available
+                    for action in self._last_vla_resp["actions"]:
+                        if action.get("type") == "move":
+                            cmd = action.get("cmd", "S")
+                            break
+            
+            # 3. HUD status
+            status_text = "VLA: Thinking..." if self._vla_busy else "VLA: Waiting for change"
+            draw_text(frame, status_text, (10, 60), size=0.6, color=_CLR_BLUE)
+            
             return cmd, frame
 
         except Exception as exc:
             log.error("[BRAIN] VLA mode error: %s", exc)
-            # Safe fallback - stop and show error
-            draw_text(
-                frame, "VLA ERROR - STOPPED",
-                (10, 60), size=0.7, color=_CLR_RED
-            )
+            draw_text(frame, "VLA ERROR", (10, 60), size=0.6, color=_CLR_RED)
             return "S", frame
+
+    def _vla_inference_task(self, frame: np.ndarray) -> None:
+        """Background thread for LLM vision analysis."""
+        try:
+            resp = self.vla.get_response(frame)
+            
+            # Update internal state with new JSON response
+            with self._vla_lock:
+                self._last_vla_resp = resp
+            
+            # Provide real-time TTS feedback (progress tracking)
+            speech = resp.get("speech")
+            if speech:
+                log.info("[VLA] Speaking: %s", speech)
+                # Use pipeline's TTS directly
+                if hasattr(self._pipeline, 'tts') and self._pipeline.tts:
+                    self._pipeline.tts.speak(speech)
+                
+        except Exception as exc:
+            log.error("[VLA] Inference task failed: %s", exc)
+        finally:
+            self._vla_busy = False
 
     # ── HUD overlay ───────────────────────────────────────────────────────────
 
@@ -374,15 +416,20 @@ class RobotBrain:
             # Register REST API Flask blueprint (inject CommandQueue & RobotState)
             try:
                 from backend.api import create_api_blueprint
-                from flask import Flask
-                if hasattr(self._web, 'app') and self._web.app:
-                    flask_app = self._web.app
+                timeout_s = 5.0
+                waited_s = 0.0
+                step_s = 0.1
+                while self._web.app is None and waited_s < timeout_s:
+                    time.sleep(step_s)
+                    waited_s += step_s
+
+                if self._web.app is None:
+                    log.warning("[BRAIN] Web app not ready; skipping REST blueprint registration")
                 else:
-                    flask_app = Flask(__name__)
-                flask_app.register_blueprint(create_api_blueprint(
-                    command_queue=getattr(self._pipeline, 'command_queue', None),
-                    robot_state=self._state
-                ))
+                    self._web.app.register_blueprint(create_api_blueprint(
+                        command_queue=getattr(self._pipeline, 'cmd_queue', None),
+                        robot_state=self._state
+                    ))
             except Exception as api_exc:
                 log.warning(f"[BRAIN] Failed to register REST API blueprint: {api_exc}")
         self._pipeline.start()
@@ -421,23 +468,23 @@ class RobotBrain:
 
                     # ── CV dispatch ───────────────────────────────────────────────
                     try:
-                        mode = self._state.mode
-                        if mode == MODE_LFR:
-                            cmd, display = self._run_lfr(frame)
-                        elif mode == MODE_HUMAN:
-                            cmd, display = self._run_human(frame)
-                        elif mode == MODE_VLA:
-                            cmd, display = self._run_vla(frame)
-                        elif mode == MODE_IDLE:
-                            cmd = "S"
-                            display = frame
-                        elif mode == MODE_MANUAL:
-                            cmd = self._state.last_cmd
-                            display = frame
-                        else:
-                            log.warning("[BRAIN] Unknown mode: %s", mode)
-                            cmd = "S"
-                            display = frame
+                        match self._state.mode:
+                            case RobotMode.LFR.value:
+                                cmd, display = self._run_lfr(frame)
+                            case RobotMode.HUMAN_TRACK.value:
+                                cmd, display = self._run_human(frame)
+                            case RobotMode.VLA.value:
+                                cmd, display = self._run_vla(frame)
+                            case RobotMode.IDLE.value:
+                                cmd = "S"
+                                display = frame
+                            case RobotMode.MANUAL.value:
+                                cmd = self._state.last_cmd
+                                display = frame
+                            case unknown_mode:
+                                log.warning("[BRAIN] Unknown mode: %s", unknown_mode)
+                                cmd = "S"
+                                display = frame
 
                     except Exception as exc:
                         log.error("[BRAIN] CV processing error: %s", exc)
@@ -476,7 +523,14 @@ class RobotBrain:
                             hud_frame = self._get_pooled_frame_copy(frame)
                             display = hud_frame
                         display = self._draw_hud(display)
-                        cv2.imshow("Robot Brain", display)
+                        
+                        try:
+                            cv2.imshow("Robot Brain", display)
+                        except Exception:
+                            # Fallback to pygame if cv2.imshow fails (e.g. no GUI backend)
+                            from pygame_preview import pygame_bgr_preview
+                            pygame_bgr_preview(display, window_name="Robot Brain (Pygame Fallback)")
+
                     except Exception as exc:
                         log.warning("[BRAIN] Display update failed: %s", exc)
                         # Continue without display update
@@ -529,6 +583,8 @@ class RobotBrain:
                 cap.release()
                 if self.use_socket:
                     self.comms.close()
+                if self.use_web:
+                    self._web.stop()
                 cv2.destroyAllWindows()
                 log.info("[BRAIN] Shutdown complete.")
             except Exception as exc:
@@ -553,8 +609,8 @@ def _parse_args() -> argparse.Namespace:
                    help="Disable Flask web server (CV+voice only, no dashboard)")
     p.add_argument("--laptop", action="store_true",
                    help="Use laptop webcam (device 1) instead of /dev/video2")
-    p.add_argument("--model", default="moondream",
-                   help="Ollama model for VLA mode (default: moondream)")
+    p.add_argument("--model", default="gemma4-e2b-nothink:latest",
+                   help="Ollama model for VLA mode (default: gemma4-e2b-nothink:latest)")
     p.add_argument("--sensitivity", type=float, default=0.6,
                    help="Wake word sensitivity (0.0 to 1.0, default: 0.6)")
     p.add_argument("--stt-threshold", type=int, default=850,
@@ -566,8 +622,6 @@ def main() -> None:
     args = _parse_args()
     from backend.config.config import CAMERA_ALIAS_RESOLVE  # added for device aliasing
 
-    # Handle device alias mapping early
-    from backend.config.config import CAMERA_ALIAS_RESOLVE
     device_arg = args.device
     device_real = CAMERA_ALIAS_RESOLVE.get(device_arg, device_arg)
 

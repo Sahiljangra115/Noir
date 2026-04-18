@@ -4,6 +4,7 @@ Test configuration and fixtures for JARVIS Robot project.
 import pytest
 import tempfile
 import os
+import socket
 from unittest.mock import Mock, MagicMock
 import numpy as np
 import cv2
@@ -84,3 +85,41 @@ def disable_hardware():
     for module_name in mock_modules:
         if module_name in sys.modules:
             del sys.modules[module_name]
+
+
+@pytest.fixture
+def web_server_instance(mock_robot_state, mock_robot_comms):
+    """Start the WebServer in a background thread for testing."""
+    from web_server import WebServer
+    import time
+    import requests
+
+    os.environ["JARVIS_SECRET_KEY"] = "test-secret"
+
+    # Pick a free port dynamically to avoid conflicts
+    with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
+        s.bind(("127.0.0.1", 0))
+        test_port = s.getsockname()[1]
+
+    server = WebServer(state=mock_robot_state, comms=mock_robot_comms, port=test_port)
+    server.start()
+
+    headers = {"Authorization": "Bearer test-secret"}
+
+    # Wait for server to start with retries
+    max_retries = 10
+    started = False
+    for i in range(max_retries):
+        try:
+            requests.get(f"http://127.0.0.1:{test_port}/status", headers=headers, timeout=0.5)
+            started = True
+            break
+        except requests.exceptions.ConnectionError:
+            time.sleep(0.5)
+
+    if not started:
+        # Fallback wait if health check fails but server might be up
+        time.sleep(2.0)
+
+    yield server
+    server.stop()

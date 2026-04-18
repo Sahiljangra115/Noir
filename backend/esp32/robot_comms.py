@@ -160,14 +160,14 @@ class RobotComms:
 
         try:
             # Use select to check if socket is writable before sending
-            ready, _, error = select.select([], [self._client], [self._client], _SEND_TIMEOUT_S)
+            _, writable, error = select.select([], [self._client], [self._client], _SEND_TIMEOUT_S)
 
             if error:
                 log.warning("[COMMS] Socket error detected")
                 self._client = None  # Mark as disconnected
                 return False
 
-            if ready:
+            if writable:
                 self._client.sendall(cmd.encode("utf-8"))
                 self._last_cmd = cmd
                 return True

@@ -139,3 +139,36 @@ class TestWebServerIntegration:
         server.update_conversation("Hello", "Hi there")
 
         # Should be a no-op for compatibility
+
+    def test_handle_command_payload_mode(self, web_server_setup):
+        """Test shared command handler for mode updates."""
+        server, state, comms = web_server_setup
+
+        payload = {"type": "mode", "value": "VLA"}
+        body, status = server._handle_command_payload(payload)
+
+        assert status == 200
+        assert body["status"] == "ok"
+        assert body["mode"] == "VLA"
+        assert state.mode == "VLA"
+
+    def test_handle_command_payload_move(self, web_server_setup):
+        """Test shared command handler for movement commands."""
+        server, state, comms = web_server_setup
+
+        payload = {"type": "move", "cmd": "F", "duration": 0.2}
+        body, status = server._handle_command_payload(payload)
+
+        assert status == 200
+        assert body["status"] == "ok"
+        assert body["cmd"] == "F"
+        comms.send.assert_called_with("F")
+
+    def test_handle_command_payload_invalid(self, web_server_setup):
+        """Test shared command handler rejects unsupported payload."""
+        server, state, comms = web_server_setup
+
+        body, status = server._handle_command_payload({"type": "unknown"})
+
+        assert status == 400
+        assert body["status"] == "error"

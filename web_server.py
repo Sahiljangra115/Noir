@@ -39,6 +39,7 @@ import queue
 import threading
 import time
 import os
+import hmac
 from typing import Optional
 from functools import wraps
 
@@ -66,8 +67,14 @@ def require_auth(f):
     @wraps(f)
     def decorated(*args, **kwargs):
         token = request.headers.get('Authorization')
-        expected = os.getenv('JARVIS_SECRET_KEY', 'jarvis-robot-secret')
-        if not token or token != f"Bearer {expected}":
+        expected = os.getenv('JARVIS_SECRET_KEY')
+        if not expected:
+            log.error("[WEB] JARVIS_SECRET_KEY is not configured")
+            return jsonify({"status": "error", "msg": "Server auth misconfigured"}), 503
+        if not token:
+            log.warning("[WEB] Missing auth header from %s", request.remote_addr)
+            return jsonify({"status": "error", "msg": "Unauthorized"}), 401
+        if not hmac.compare_digest(token, f"Bearer {expected}"):
             log.warning("[WEB] Unauthorized REST access attempt from %s", request.remote_addr)
             return jsonify({"status": "error", "msg": "Unauthorized"}), 401
         return f(*args, **kwargs)
@@ -110,6 +117,10 @@ class WebServer:
         # Shared timer for move commands to avoid thread leaks
         self._move_timer: Optional[threading.Timer] = None
         self._move_lock = threading.Lock()
+        self._thread: Optional[threading.Thread] = None
+        self._serve_started = threading.Event()
+        self.app: Optional[object] = None
+        self._running = False
 
     # ── Public API ────────────────────────────────────────────────────────────
 
@@ -170,9 +181,61 @@ class WebServer:
                 "      uv pip install flask-socketio simple-websocket"
             )
             return
-        t = threading.Thread(target=self._serve, daemon=True, name="web-server")
-        t.start()
+        self._running = True
+        self._thread = threading.Thread(target=self._serve, daemon=True, name="web-server")
+        self._thread.start()
         log.info("[WEB] SocketIO server starting at http://%s:%d", self._host, self._port)
+
+    def stop(self) -> None:
+        """Best-effort stop for tests and standalone runs."""
+        self._running = False
+        with self._move_lock:
+            if self._move_timer is not None:
+                self._move_timer.cancel()
+                self._move_timer = None
+
+    def _handle_command_payload(self, data: dict) -> tuple[dict, int]:
+        """Shared command handler for REST and SocketIO command events."""
+        typ = data.get("type", "")
+
+        if typ == "mode":
+            value = data.get("value", data.get("mode", "IDLE"))
+            if value in {"LFR", "HUMAN_TRACK", "VLA", "GOTO", "MANUAL", "IDLE"}:
+                self._state.mode = value
+                log.info("[WEB] Mode set to %s", value)
+                return {"status": "ok", "mode": value}, 200
+            return {"status": "error", "msg": "unknown mode"}, 400
+
+        if typ == "move":
+            cmd_char_raw = str(data.get("cmd", "S")).upper().strip()
+            cmd_char = cmd_char_raw[:1] if cmd_char_raw else ""
+            try:
+                duration = float(data.get("duration", 1.0))
+            except (TypeError, ValueError):
+                return {"status": "error", "msg": "invalid duration"}, 400
+
+            duration = max(0.1, min(duration, 5.0))
+
+            if cmd_char and cmd_char in "FBLRS":
+                self._comms.send(cmd_char)
+                self._state.last_cmd = cmd_char
+
+                with self._move_lock:
+                    if self._move_timer is not None:
+                        self._move_timer.cancel()
+
+                    def _stop():
+                        self._comms.send("S")
+                        self._state.last_cmd = "S"
+
+                    self._move_timer = threading.Timer(duration, _stop)
+                    self._move_timer.daemon = True
+                    self._move_timer.start()
+
+                return {"status": "ok", "cmd": cmd_char}, 200
+            return {"status": "error", "msg": "unknown cmd"}, 400
+
+        return {"status": "error", "msg": "unknown type"}, 400
 
     # ── TTS relay (called from PiperTTS thread) ───────────────────────────────
 
@@ -193,7 +256,7 @@ class WebServer:
     # ── Background state broadcast (300 ms) ──────────────────────────────────
 
     def _state_pusher(self) -> None:
-        while True:
+        while self._running:
             time.sleep(0.3)
             if self._sio is not None and self._state.phone_connected:
                 try:
@@ -208,7 +271,13 @@ class WebServer:
         _logging.getLogger("werkzeug").setLevel(_logging.ERROR)
 
         app = Flask(__name__)
-        app.config["SECRET_KEY"] = os.getenv("JARVIS_SECRET_KEY", "jarvis-robot-secret")
+        self.app = app
+
+        secret = os.getenv("JARVIS_SECRET_KEY")
+        if not secret:
+            log.error("[WEB] JARVIS_SECRET_KEY is not set; refusing to start web server")
+            return
+        app.config["SECRET_KEY"] = secret
 
         # Rate limiting to prevent command spamming
         limiter = Limiter(
@@ -219,6 +288,16 @@ class WebServer:
         )
 
         from backend.config.config import ALLOWED_ORIGINS
+
+        @app.after_request
+        def add_cors_headers(response):
+            origin = request.headers.get("Origin")
+            if origin and origin in ALLOWED_ORIGINS:
+                response.headers["Access-Control-Allow-Origin"] = origin
+                response.headers["Vary"] = "Origin"
+                response.headers["Access-Control-Allow-Headers"] = "Authorization, Content-Type"
+                response.headers["Access-Control-Allow-Methods"] = "GET, POST, OPTIONS"
+            return response
 
         sio = SocketIO(
             app,
@@ -247,46 +326,17 @@ class WebServer:
         @limiter.limit("5 per second")
         def command():
             data     = request.get_json(silent=True) or {}
-            typ      = data.get("type", "")
-
-            if typ == "mode":
-                value = data.get("value", "IDLE")
-                if value in {"LFR", "HUMAN_TRACK", "VLA", "GOTO", "MANUAL", "IDLE"}:
-                    self._state.mode = value
-                    log.info("[WEB] Mode set to %s", value)
-                    return jsonify({"status": "ok", "mode": value})
-                return jsonify({"status": "error", "msg": "unknown mode"}), 400
-
-            if typ == "move":
-                cmd_char = data.get("cmd", "S")
-                duration = float(data.get("duration", 1.0))
-                if cmd_char in "FBLRS":
-                    self._comms.send(cmd_char)
-                    self._state.last_cmd = cmd_char
-
-                    # Cancel any existing timer to avoid thread leaks
-                    with self._move_lock:
-                        if self._move_timer is not None:
-                            self._move_timer.cancel()
-
-                        def _stop():
-                            self._comms.send("S")
-                            self._state.last_cmd = "S"
-
-                        self._move_timer = threading.Timer(duration, _stop)
-                        self._move_timer.daemon = True
-                        self._move_timer.start()
-
-                    return jsonify({"status": "ok", "cmd": cmd_char})
-                return jsonify({"status": "error", "msg": "unknown cmd"}), 400
-
-            return jsonify({"status": "error", "msg": "unknown type"}), 400
+            body, status = self._handle_command_payload(data)
+            return jsonify(body), status
 
         # ── SocketIO events ───────────────────────────────────────────────────
 
         @sio.on("connect")
         def on_connect(auth=None):
-            expected = os.getenv('JARVIS_SECRET_KEY', 'jarvis-robot-secret')
+            expected = os.getenv('JARVIS_SECRET_KEY')
+            if not expected:
+                log.error("[WEB] JARVIS_SECRET_KEY is not configured")
+                return False
             
             # Support both 'auth' dict (SocketIO 4+) and 'token' query param
             token = None
@@ -295,7 +345,7 @@ class WebServer:
             if not token:
                 token = request.args.get("token")
                 
-            if token != expected:
+            if not token or not hmac.compare_digest(token, expected):
                 log.warning("[WEB] Unauthorized SocketIO connection attempt from %s", request.remote_addr)
                 return False  # Refuse connection
 
@@ -357,6 +407,16 @@ class WebServer:
             log.info("[WEB] force_listen received.")
             if self._voice_pipeline is not None:
                 self._voice_pipeline.trigger_force_listen()
+
+        @sio.on("command")
+        def on_command(data):
+            """Optional direct command channel for mobile clients."""
+            if not isinstance(data, dict):
+                emit("command_ack", {"status": "error", "msg": "invalid payload"})
+                return
+            body, status = self._handle_command_payload(data)
+            body["http_status"] = status
+            emit("command_ack", body)
 
         # ── Start state pusher thread ──────────────────────────────────────
         threading.Thread(
@@ -443,6 +503,14 @@ _HTML = """<!DOCTYPE html>
   <div id="log"></div>
 
 <script>
+  const token = localStorage.getItem('jarvisToken') || '';
+
+  function authHeaders(extra = {}) {
+    const headers = {...extra};
+    if (token) headers['Authorization'] = `Bearer ${token}`;
+    return headers;
+  }
+
   function addLog(msg) {
     const el = document.getElementById('log');
     el.innerHTML += new Date().toLocaleTimeString() + '  ' + msg + '<br>';
@@ -450,18 +518,22 @@ _HTML = """<!DOCTYPE html>
   }
   function cmd(c) {
     fetch('/command', {method:'POST',
-      headers:{'Content-Type':'application/json'},
+      headers:authHeaders({'Content-Type':'application/json'}),
       body: JSON.stringify({type:'move', cmd:c, duration:1.0})
     }).then(r=>r.json()).then(d=>addLog('move ' + c + ' \u2192 ' + d.status));
   }
   function mode(m) {
     fetch('/command', {method:'POST',
-      headers:{'Content-Type':'application/json'},
+      headers:authHeaders({'Content-Type':'application/json'}),
       body: JSON.stringify({type:'mode', value:m})
     }).then(r=>r.json()).then(d=>addLog('mode ' + m + ' \u2192 ' + d.status));
   }
   setInterval(() => {
-    fetch('/status').then(r=>r.json()).then(d=>{
+    fetch('/status', {headers:authHeaders()}).then(r=>r.json()).then(d=>{
+      if (d.status === 'error') {
+        addLog('status error: ' + d.msg);
+        return;
+      }
       document.getElementById('s-mode').textContent     = d.mode;
       document.getElementById('s-cmd').textContent      = d.last_cmd;
       document.getElementById('s-yolo').textContent     = d.yolo_info;
@@ -475,7 +547,7 @@ _HTML = """<!DOCTYPE html>
         badge.textContent = 'PHONE: OFFLINE';
         badge.className = 'disconnected';
       }
-    });
+    }).catch(() => {});
   }, 1000);
 </script>
 </body>
