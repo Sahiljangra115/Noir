@@ -35,3 +35,15 @@ jarvis_app/flutter.log
 # ESP32 build artifacts
 backend/esp32/build/
 backend/esp32/sdkconfig.old
+backend/esp32/.cache/
+
+# Docs and stray files: kept locally, excluded from GitHub.
+# All markdown is ignored except the project README.
+*.md
+!/README.md
+
+# Stray local notes and media (not part of the repo)
+Learning.txt
+API-LEARNINGS.txt
+camera_phone_webcam.txt
+WhatsApp Image*.jpeg
