@@ -12,6 +12,7 @@ detected via OpenCV, saving compute and preventing redundant calls.
 import base64
 import hashlib
 import logging
+import threading
 import time
 import json
 import re
@@ -20,32 +21,37 @@ from typing import Optional, Dict, Any
 import cv2
 import numpy as np
 import requests
+from backend.services.llm_parser import LLMResponse
 log = logging.getLogger(__name__)
 
 # ── Ollama defaults ────────────────────────────────────────────────────────────
 _OLLAMA_URL    = "http://localhost:11434/api/generate"
 _DEFAULT_MODEL = "gemma4-e2b-nothink:latest"
-_TIMEOUT_S     = 20                 # Vision LLMs need more time than text
+_TIMEOUT_S     = 60                 # Cold VLM load on first call can take 20-40s
+_KEEP_ALIVE    = "30m"              # Pin model in GPU between calls
 _JPEG_QUALITY  = 65
 _FRAME_RESIZE_MAX = 640
 
 # ── Thresholds ────────────────────────────────────────────────────────────────
 _DIFF_THRESHOLD = 15.0              # MSE threshold for "significant change"
 
-_PROMPT = """\
+def _build_prompt(state: dict | None) -> str:
+    mode     = (state or {}).get("mode", "VLA")
+    last_cmd = (state or {}).get("last_cmd", "S")
+    yolo     = (state or {}).get("yolo_info", "none")
+    return f"""\
 You are the navigation and perception brain of JARVIS, a wheeled robot.
-Analyze this image and describe what you see, specifically focusing on your progress if you have a goal.
+Current Mode: {mode}
+Last Command: {last_cmd}
+Vision Context: {yolo}
+
+Analyze this image and describe what you see, focusing on your progress.
 
 Respond with ONLY a raw JSON object — no markdown, no preamble.
-Respond with ONLY a JSON object in this format:
-{
-    "speech": "Short description of what you see or your progress.",
-    "actions": [{"type": "move", "cmd": "F", "duration": 2.0}]
-}
+{{"speech": "...", "actions": [{{"type": "move", "cmd": "F", "duration": 2.0}}]}}
 
 Available movement commands: F (Forward), B (Backward), L (Left), R (Right), S (Stop).
-Keep durations short (1.0 to 3.0 seconds).
-"""
+Keep durations short (1.0 to 3.0 seconds)."""
 
 class GemmaVLAProcessor:
     """
@@ -66,8 +72,28 @@ class GemmaVLAProcessor:
         # Connection optimization
         adapter = requests.adapters.HTTPAdapter(pool_connections=1, pool_maxsize=2)
         self._session.mount("http://", adapter)
-        
+
         log.info("[VLA] Gemma VLA ready – model=%s", model)
+
+        # Warm-up: load weights into GPU so first user request avoids
+        # the 20-40s cold load. Fire-and-forget in a daemon thread.
+        threading.Thread(target=self._warmup, name="vla-warmup", daemon=True).start()
+
+    def _warmup(self) -> None:
+        try:
+            self._session.post(
+                self.url,
+                json={
+                    "model":      self.model,
+                    "prompt":     "ok",
+                    "stream":     False,
+                    "keep_alive": _KEEP_ALIVE,
+                },
+                timeout=_TIMEOUT_S,
+            )
+            log.info("[VLA] Warm-up complete – model pinned in GPU")
+        except Exception as exc:
+            log.warning("[VLA] Warm-up failed (will retry on first frame): %s", exc)
 
     def has_significant_change(self, frame: np.ndarray) -> bool:
         """
@@ -93,7 +119,7 @@ class GemmaVLAProcessor:
             log.warning("[VLA] Change detection failed: %s", exc)
             return True
 
-    def get_response(self, frame: np.ndarray) -> Dict[str, Any]:
+    def get_response(self, frame: np.ndarray, state: dict | None = None) -> Dict[str, Any]:
         """
         Sends frame to Gemma 4 and returns parsed JSON response.
         """
@@ -109,12 +135,13 @@ class GemmaVLAProcessor:
             return self._fallback("Internal image error.")
 
         payload = {
-            "model":  self.model,
-            "prompt": _PROMPT,
-            "images": [img_b64],
-            "format": "json",
-            "stream": False,
-            "options": {"temperature": 0.2}
+            "model":      self.model,
+            "prompt":     _build_prompt(state),
+            "images":     [img_b64],
+            "format":     "json",
+            "stream":     False,
+            "keep_alive": _KEEP_ALIVE,
+            "options":    {"temperature": 0.2},
         }
 
         t0 = time.monotonic()
@@ -134,13 +161,12 @@ class GemmaVLAProcessor:
     def _parse_json(self, raw: str) -> Dict[str, Any]:
         raw = re.sub(r"```(?:json)?", "", raw).strip()
         if not (raw.startswith("{") and raw.endswith("}")):
-            match = re.search(r"\{.*\}", raw, re.DOTALL)
-            if match: raw = match.group()
-
+            m = re.search(r"\{.*\}", raw, re.DOTALL)
+            if m: raw = m.group()
         try:
-            return json.loads(raw)
+            return LLMResponse.model_validate_json(raw).model_dump()
         except Exception:
-            log.warning("[VLA] Failed to parse JSON: %s", raw)
+            log.warning("[VLA] Failed to parse/validate JSON: %s", raw)
             return self._fallback("I had trouble describing what I saw.")
 
     def _fallback(self, speech: str) -> Dict[str, Any]:

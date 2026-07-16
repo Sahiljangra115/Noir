@@ -1,111 +1,79 @@
 """
 pipeline/wake_word.py
 ──────────────────────
-Continuously listens on the microphone and blocks until the
-configured wake word is detected.
+Wake-word detector backed by openWakeWord (Apache-2.0).
 
-Uses Porcupine by Picovoice — extremely accurate, runs on CPU,
-< 1% CPU load.  GPU stays fully free for Whisper and YOLO.
+Replaces Porcupine. No vendor key required.
 
-Built-in keywords available on Linux (no .ppn file needed):
-    "jarvis"        ← default (say "jarvis")
-    "alexa"
-    "bumblebee"
-    "computer"
-    "grasshopper"
-    "picovoice"
-    "porcupine"
-    "terminator"
-
-Requires a FREE Picovoice access key:
-    1. Sign up at https://console.picovoice.ai  (30 seconds)
-    2. Copy your Access Key
-    3. Set environment variable:
-           export PORCUPINE_ACCESS_KEY="your_key_here"
-       Or add it to a .env file in the project root.
+Default keyword maps:
+    "jarvis" / "hey_jarvis"  → hey_jarvis_v0.1.onnx
+    "alexa"                  → alexa_v0.1.onnx
+    "hey_mycroft"            → hey_mycroft_v0.1.onnx
 
 Usage:
-    det = WakeWordDetector(keyword="jarvis")
-    det.wait_for_wakeword()     # blocks until "jarvis" is spoken
+    det = WakeWordDetector(keyword="jarvis", sensitivity=0.5)
+    det.wait_for_wakeword()   # blocks until detected
+    det.close()
 """
 
 import logging
-import os
 
 log = logging.getLogger(__name__)
 
-# Porcupine audio requirements
-_SAMPLE_RATE = 16_000   # Hz  (fixed by Porcupine)
-# frame_length is obtained from the live porcupine instance (always 512)
+_SAMPLE_RATE = 16_000
+_FRAME_SAMPLES = 1280
+
+_KEYWORD_TO_MODEL_FILE = {
+    "jarvis": "hey_jarvis_v0.1",
+    "hey_jarvis": "hey_jarvis_v0.1",
+    "alexa": "alexa_v0.1",
+    "hey_mycroft": "hey_mycroft_v0.1",
+}
 
 
 class WakeWordDetector:
     def __init__(
         self,
-        keyword:     str = "jarvis",
+        keyword: str = "jarvis",
         sensitivity: float = 0.5,
-        access_key:  str | None = None,
+        access_key: str | None = None,
     ) -> None:
-        """
-        Parameters
-        ----------
-        keyword     : built-in keyword name (see module docstring for full list)
-        sensitivity : detection threshold (0.0 to 1.0). Higher is more sensitive.
-        access_key  : Picovoice access key.  If None, reads from the
-                      PORCUPINE_ACCESS_KEY environment variable.
-        """
-        self.keyword     = keyword.lower()
-        self.sensitivity = sensitivity
-        self.access_key  = access_key or os.environ.get("PORCUPINE_ACCESS_KEY", "")
-        self._handle     = None    # pvporcupine instance, lazy-loaded
-
-    # ── Lazy load ─────────────────────────────────────────────────────────────
+        self.keyword = keyword.lower()
+        self.sensitivity = float(sensitivity)
+        self._model = None
+        self._model_key = _KEYWORD_TO_MODEL_FILE.get(self.keyword, "hey_jarvis_v0.1")
+        if access_key:
+            log.debug("[WAKE] access_key arg ignored — openWakeWord requires no key")
 
     def _load(self) -> None:
-        if self._handle is not None:
+        if self._model is not None:
             return
-
-        if not self.access_key:
-            raise RuntimeError(
-                "\n[WAKE] Porcupine access key not set!\n"
-                "  1. Get a free key at https://console.picovoice.ai\n"
-                "  2. export PORCUPINE_ACCESS_KEY='your_key_here'\n"
-            )
-
         try:
-            import pvporcupine
+            import openwakeword
+            from openwakeword.model import Model
         except ImportError:
             raise RuntimeError(
-                "pvporcupine not installed.\n"
-                "  uv pip install pvporcupine"
+                "openwakeword not installed.\n"
+                "  uv pip install openwakeword"
             )
 
-        # Validate keyword
-        available = list(pvporcupine.KEYWORDS)
-        if self.keyword not in available:
-            raise ValueError(
-                f"Unknown keyword '{self.keyword}'.\n"
-                f"Available: {sorted(available)}"
+        all_paths = openwakeword.get_pretrained_model_paths()
+        match = [p for p in all_paths if self._model_key in p]
+        if not match:
+            raise RuntimeError(
+                f"[WAKE] model '{self._model_key}' not found in openwakeword resources.\n"
+                f"  available: {all_paths}"
             )
 
-        self._handle = pvporcupine.create(
-            access_key=self.access_key,
-            keywords=[self.keyword],
-            sensitivities=[self.sensitivity],
-        )
+        self._model = Model(wakeword_model_paths=match)
         log.info(
-            "[WAKE] Porcupine ready — keyword='%s' (sens=%.2f)  frame=%d  sr=%d",
-            self.keyword, self.sensitivity, self._handle.frame_length, self._handle.sample_rate,
+            "[WAKE] openWakeWord ready — model='%s' (sens=%.2f) frame=%d sr=%d",
+            self._model_key, self.sensitivity, _FRAME_SAMPLES, _SAMPLE_RATE,
         )
         print(f"[WAKE] Say '{self.keyword.capitalize()}' to activate.")
 
-    # ── Public API ────────────────────────────────────────────────────────────
-
     def wait_for_wakeword(self) -> None:
-        """
-        Block the calling thread until the wake word is spoken.
-        Runs entirely on CPU — GPU stays free for Whisper + YOLO.
-        """
+        """Block until wake word detected on default mic."""
         self._load()
 
         try:
@@ -117,29 +85,95 @@ class WakeWordDetector:
                 "  sudo apt install portaudio19-dev"
             )
 
-        frame_len = self._handle.frame_length   # 512 samples @ 16 kHz
+        import numpy as np
 
         log.debug("[WAKE] Listening for '%s'…", self.keyword)
 
+        recent_scores: list = []
+        SMOOTH_WINDOW = 3
         with sd.InputStream(
             samplerate=_SAMPLE_RATE,
             channels=1,
             dtype="int16",
-            blocksize=frame_len,
+            blocksize=_FRAME_SAMPLES,
         ) as stream:
             while True:
-                pcm_chunk, _ = stream.read(frame_len)
-                pcm_flat = pcm_chunk.flatten().tolist()
-
-                result = self._handle.process(pcm_flat)
-                # result >= 0 → keyword index detected; -1 → nothing
-                if result >= 0:
-                    log.info("[WAKE] '%s' detected", self.keyword)
+                pcm_chunk, _ = stream.read(_FRAME_SAMPLES)
+                audio = np.asarray(pcm_chunk, dtype=np.int16).flatten()
+                scores = self._model.predict(audio)
+                score = float(scores.get(self._model_key, 0.0))
+                recent_scores.append(score)
+                if len(recent_scores) > SMOOTH_WINDOW:
+                    recent_scores.pop(0)
+                smooth = sum(recent_scores) / len(recent_scores)
+                peak = max(recent_scores)
+                if peak >= self.sensitivity or smooth >= self.sensitivity * 0.8:
+                    log.info(
+                        "[WAKE] '%s' detected (peak=%.2f smooth=%.2f thresh=%.2f)",
+                        self.keyword, peak, smooth, self.sensitivity,
+                    )
                     print(f"\n[WAKE] '{self.keyword.capitalize()}' detected — listening…")
                     return
 
+    def wait_for_wakeword_from_queue(
+        self,
+        audio_queue,
+        stop_event=None,
+    ) -> bool:
+        """Block until wake word detected on PCM16 chunks arriving via queue.
+
+        Returns True on detection, False if stop_event is set first.
+        Phone chunks are variable-size; buffer into 1280-sample frames.
+        """
+        self._load()
+
+        import queue as _q
+        import numpy as np
+
+        log.debug("[WAKE] Listening (phone) for '%s'…", self.keyword)
+
+        buf = np.zeros(0, dtype=np.int16)
+        # 3-frame moving avg smooths borderline scores so easy speech triggers
+        recent_scores: list = []
+        SMOOTH_WINDOW = 3
+        while True:
+            if stop_event is not None and stop_event.is_set():
+                return False
+            try:
+                raw = audio_queue.get(timeout=0.1)
+            except _q.Empty:
+                continue
+            if not raw or len(raw) < 2:
+                continue
+            if len(raw) % 2:
+                raw = raw[:-1]
+            chunk = np.frombuffer(raw, dtype=np.int16)
+            buf = np.concatenate([buf, chunk]) if buf.size else chunk
+
+            while buf.size >= _FRAME_SAMPLES:
+                frame = buf[:_FRAME_SAMPLES]
+                buf = buf[_FRAME_SAMPLES:]
+                scores = self._model.predict(frame)
+                score = float(scores.get(self._model_key, 0.0))
+                recent_scores.append(score)
+                if len(recent_scores) > SMOOTH_WINDOW:
+                    recent_scores.pop(0)
+                smooth = sum(recent_scores) / len(recent_scores)
+                peak = max(recent_scores)
+                # Trigger on either instant peak or smoothed run — easier to wake
+                if peak >= self.sensitivity or smooth >= self.sensitivity * 0.8:
+                    log.info(
+                        "[WAKE] '%s' detected (phone peak=%.2f smooth=%.2f thresh=%.2f)",
+                        self.keyword, peak, smooth, self.sensitivity,
+                    )
+                    print(f"\n[WAKE] '{self.keyword.capitalize()}' detected (phone) — listening…")
+                    return True
+
     def close(self) -> None:
-        """Release Porcupine resources. Call on shutdown."""
-        if self._handle is not None:
-            self._handle.delete()
-            self._handle = None
+        if self._model is not None:
+            try:
+                if hasattr(self._model, "reset"):
+                    self._model.reset()
+            except Exception:
+                pass
+            self._model = None

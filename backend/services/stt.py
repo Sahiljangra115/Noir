@@ -70,10 +70,14 @@ class WhisperSTT:
                     log.info("[STT] CUDA available — using GPU")
                 else:
                     raise RuntimeError("CUDA not available")
-            except Exception:
+            except (ImportError, RuntimeError, AttributeError) as exc:
                 device       = "cpu"
                 compute_type = "int8" if compute_type == "auto" else compute_type
-                log.warning("[STT] CUDA unavailable — falling back to CPU (slower)")
+                log.warning(
+                    "[STT] CUDA unavailable — falling back to CPU (slower): %s",
+                    exc,
+                    exc_info=True,
+                )
 
         if compute_type == "auto":
             compute_type = "int8"
@@ -174,20 +178,32 @@ class WhisperSTT:
         self,
         audio_queue: queue.Queue,
         max_duration:      float = 12.0,
-        silence_timeout:   float = _SILENCE_TIMEOUT,
-        no_speech_timeout: float = _NO_SPEECH_TIMEOUT,
+        silence_timeout:   float = 1.0,
+        no_speech_timeout: float = 4.0,
         ptt_callback:      callable = None,
     ) -> str:
         """
         Transcribe audio arriving as PCM16 bytes via a Queue.
 
         The Flutter app streams PCM16 LE (16 kHz, mono) binary chunks
-        continuously. This reads them with the same energy-based VAD as listen().
-
-        Each queue item must be a bytes object (PCM16 LE, 512 samples = 1024 bytes).
-        Returns transcribed text, or "" on timeout / no speech.
+        continuously. Phone chunks are variable-size (1KB–8KB). Per-chunk
+        VAD compares RMS against a phone-tuned threshold.
         """
         self._load()
+
+        # Phone mic noise floor differs from laptop — lower threshold
+        phone_threshold = max(150, int(self.energy_threshold * 0.4))
+
+        # Drain stale audio queued before the user tapped to talk
+        drained = 0
+        while True:
+            try:
+                audio_queue.get_nowait()
+                drained += 1
+            except queue.Empty:
+                break
+        if drained:
+            log.info("[STT] Drained %d stale chunks before listening", drained)
 
         max_chunks         = int(max_duration      * _SAMPLE_RATE / _CHUNK)
         silence_chunks_max = int(silence_timeout   * _SAMPLE_RATE / _CHUNK)
@@ -202,7 +218,9 @@ class WhisperSTT:
         pre_roll:         list = []
         PRE_ROLL_SIZE     = 5
 
+        log.info("[STT] Listening (phone) energy_thresh=%d", phone_threshold)
         print("[STT] Listening (phone)…", end=" ", flush=True)
+        rms_log = []
 
         for _ in range(max_chunks):
             # PTT support: Stop instantly if space bar is released
@@ -229,26 +247,36 @@ class WhisperSTT:
                         return ""
                 continue
 
+            if not raw or len(raw) < 2:
+                continue
+            if len(raw) % 2:
+                raw = raw[:-1]
             chunk = np.frombuffer(raw, dtype=np.int16).reshape(-1, 1)
             rms = float(np.sqrt(np.mean(chunk.astype(np.float32) ** 2)))
+            rms_log.append(rms)
 
             if not speech_detected:
                 pre_roll.append(chunk.copy())
                 if len(pre_roll) > PRE_ROLL_SIZE:
                     pre_roll.pop(0)
 
-                if rms > self.energy_threshold:
+                if rms > phone_threshold:
                     speech_detected = True
                     frames.extend(pre_roll)
                     print("◉", end=" ", flush=True)
+                    log.info("[STT] Speech detected rms=%.0f thresh=%d", rms, phone_threshold)
                 else:
                     no_speech_chunks += 1
                     if no_speech_chunks >= no_speech_max:
                         print("[no speech detected]")
+                        if rms_log:
+                            log.info("[STT] no-speech: chunks=%d rms min=%.0f max=%.0f mean=%.0f thresh=%d",
+                                     len(rms_log), min(rms_log), max(rms_log),
+                                     sum(rms_log) / len(rms_log), phone_threshold)
                         return ""
             else:
                 frames.append(chunk.copy())
-                if rms < self.energy_threshold:
+                if rms < phone_threshold:
                     silence_chunks += 1
                     if silence_chunks >= silence_chunks_max:
                         print("[done]")

@@ -7,7 +7,7 @@ Orchestrates the full pipeline:
         │
         ├─ [LFR mode]         LineFollower (tracker.py)
         ├─ [HUMAN mode]       YOLOv8 HumanDetector (tracker.py)
-        ├─ [VLA mode]         Moondream via Ollama (vision_processor.py)
+        ├─ [VLA mode]         Gemma 4 via Ollama (vision_processor.py)
         └─ [MANUAL mode]      Direct voice command pass-through
                 │
         RobotComms (robot_comms.py)
@@ -36,6 +36,7 @@ Run:
 
 import argparse
 import logging
+import logging.handlers
 import sys
 import time
 import os
@@ -51,8 +52,13 @@ from dotenv import load_dotenv
 load_dotenv()
 
 # ── Core modules ─────────────────────────────────────────────────────────────
+from backend.config import config
+from backend.services import health
+from backend.services.exceptions import CameraUnavailable
 from backend.services.robot_state import RobotState
+from backend.services.supervisor import ThreadSupervisor
 from backend.services.voice_pipeline import VoicePipeline
+from backend.services import tts as tts_module
 from backend.esp32.robot_comms import RobotComms
 from vision_processor        import GemmaVLAProcessor
 from web_server              import WebServer
@@ -70,11 +76,31 @@ from tracker import (
 )
 
 # ── Logging ───────────────────────────────────────────────────────────────────
-logging.basicConfig(
-    level=logging.INFO,
-    format="%(asctime)s  %(levelname)-7s  %(message)s",
-    datefmt="%H:%M:%S",
-)
+_LOG_FORMAT = "%(asctime)s  %(levelname)-7s  %(message)s"
+_LOG_DATEFMT = "%H:%M:%S"
+
+_root_logger = logging.getLogger()
+_root_logger.setLevel(getattr(logging, str(config.LOG_LEVEL).upper(), logging.INFO))
+# Clear any pre-existing handlers (e.g. from a prior basicConfig call in tests).
+for _h in list(_root_logger.handlers):
+    _root_logger.removeHandler(_h)
+
+_console_handler = logging.StreamHandler()
+_console_handler.setFormatter(logging.Formatter(_LOG_FORMAT, _LOG_DATEFMT))
+_root_logger.addHandler(_console_handler)
+
+try:
+    config.LOG_DIR.mkdir(parents=True, exist_ok=True)
+    _file_handler = logging.handlers.RotatingFileHandler(
+        config.LOG_DIR / "jarvis.log",
+        maxBytes=config.LOG_MAX_BYTES,
+        backupCount=config.LOG_BACKUPS,
+    )
+    _file_handler.setFormatter(logging.Formatter(_LOG_FORMAT, _LOG_DATEFMT))
+    _root_logger.addHandler(_file_handler)
+except Exception as _exc:  # pragma: no cover - log dir misconfig shouldn't kill startup
+    _root_logger.warning("[LOG] Could not attach RotatingFileHandler: %s", _exc)
+
 log = logging.getLogger(__name__)
 
 from enum import Enum, auto
@@ -134,7 +160,8 @@ class RobotBrain:
         use_socket: bool = True,
         use_web:    bool = True,
         vla_model:  str  = "gemma4-e2b-nothink:latest",
-        wake_sens:  float = 0.6,
+        wake_sens:  float = 0.5,
+        wake_keyword: str = "alexa",
         stt_threshold: int = 850,
         use_wake_word: bool = True,
     ) -> None:
@@ -171,6 +198,7 @@ class RobotBrain:
         self._pipeline = VoicePipeline(
             comms=self.comms,
             state=self._state,
+            wakeword=wake_keyword,
             wake_sensitivity=wake_sens,
             stt_threshold=stt_threshold,
             enable_wake_word=use_wake_word,
@@ -190,6 +218,9 @@ class RobotBrain:
         # Memory optimization: object pooling for frequent allocations
         self._frame_pool = deque(maxlen=3)  # Pool of reusable frame copies
         self._shape_cache = {}  # Cache frame shapes to avoid recalculation
+
+        # Thread supervisor (wired in run() after services start)
+        self._supervisor: Optional[ThreadSupervisor] = None
 
     # ── Command routing ───────────────────────────────────────────────────────
 
@@ -305,10 +336,10 @@ class RobotBrain:
             # 1. Check for significant visual change to trigger new analysis
             if not self._vla_busy and self.vla.has_significant_change(frame):
                 self._vla_busy = True
-                # Trigger async inference to prevent blocking the main loop
+                state_snap = self._state.snapshot()
                 threading.Thread(
-                    target=self._vla_inference_task, 
-                    args=(frame.copy(),), 
+                    target=self._vla_inference_task,
+                    args=(frame.copy(), state_snap),
                     daemon=True
                 ).start()
 
@@ -333,25 +364,21 @@ class RobotBrain:
             draw_text(frame, "VLA ERROR", (10, 60), size=0.6, color=_CLR_RED)
             return "S", frame
 
-    def _vla_inference_task(self, frame: np.ndarray) -> None:
+    def _vla_inference_task(self, frame: np.ndarray, state: dict) -> None:
         """Background thread for LLM vision analysis."""
         try:
-            resp = self.vla.get_response(frame)
-            
-            # Update internal state with new JSON response
+            resp = self.vla.get_response(frame, state=state)
             with self._vla_lock:
                 self._last_vla_resp = resp
-            
-            # Provide real-time TTS feedback (progress tracking)
             speech = resp.get("speech")
             if speech:
                 log.info("[VLA] Speaking: %s", speech)
-                # Use pipeline's TTS directly
                 if hasattr(self._pipeline, 'tts') and self._pipeline.tts:
                     self._pipeline.tts.speak(speech)
-                
         except Exception as exc:
             log.error("[VLA] Inference task failed: %s", exc)
+            with self._vla_lock:
+                self._last_vla_resp = {"speech": "", "actions": []}
         finally:
             self._vla_busy = False
 
@@ -390,6 +417,12 @@ class RobotBrain:
     # ── Main loop ─────────────────────────────────────────────────────────────
 
     def run(self) -> None:
+        # ── Validate config + run startup health checks ───────────────────
+        config.validate_config()
+        health_results = health.run_all(config)
+        if not health_results.get("ollama", False):
+            log.warning("[BRAIN] Ollama unreachable at startup; LLM commands will retry on demand")
+
         # ── Open camera ───────────────────────────────────────────────────
         dev = self.device
         if isinstance(dev, int):
@@ -397,54 +430,103 @@ class RobotBrain:
         elif isinstance(dev, str) and dev.lstrip('-').isdigit():
             dev = int(dev)
         # else, leave as string path
-        cap = cv2.VideoCapture(dev)
-        if not cap.isOpened():
-            sys.exit(
-                f"[ERROR] Cannot open camera '{self.device}'.\n"
-                "  For phone camera:  scrcpy --video-source=camera --v4l2-sink=/dev/video2 --no-audio --max-fps 30 --max-size=1080\n"
-                "  Then run:          python main.py --no-socket --no-web\n"
-                "  For laptop webcam: python main.py --laptop --no-socket --no-web"
-            )
-        log.info("[BRAIN] Camera opened: %s", self.device)
 
-        # Set camera device in state for audio routing decisions
-        self._state.camera_device = self.device
+        cap = None
+        try:
+            cap = cv2.VideoCapture(dev)
+            if not cap.isOpened():
+                raise CameraUnavailable(self.device)
 
-        ret, frame = cap.read()
-        if not ret:
-            sys.exit("[ERROR] Could not read first frame.")
-        fh, fw = frame.shape[:2]
-        wide_side = fh if fh > fw else fw
-        self._focal_px = compute_focal(wide_side, HFOV_DEG)
-        log.info("[BRAIN] Frame %dx%d  focal=%.1fpx", fw, fh, self._focal_px)
+            # Latency reduction: shrink V4L2 driver queue to 1 frame so
+            # cap.read() returns the freshest frame, not a stale queued one.
+            # MJPG fourcc avoids YUYV→BGR conversion overhead in driver.
+            cap.set(cv2.CAP_PROP_BUFFERSIZE, 1)
+            cap.set(cv2.CAP_PROP_FOURCC, cv2.VideoWriter_fourcc(*"MJPG"))
+            cap.set(cv2.CAP_PROP_FPS, 30)
+        except CameraUnavailable as exc:
+            log.error("[BRAIN] %s — degrading to IDLE; voice + manual still work", exc)
+            self._state.mode = MODE_IDLE
+            if cap is not None:
+                cap.release()
+            cap = None
 
-        # ── ESP32 socket ──────────────────────────────────────────────────
+        if cap is not None:
+            log.info("[BRAIN] Camera opened: %s", self.device)
+
+            # Set camera device in state for audio routing decisions
+            self._state.camera_device = self.device
+
+            ret, frame = cap.read()
+            if not ret:
+                log.error("[BRAIN] Could not read first frame; degrading to IDLE")
+                self._state.mode = MODE_IDLE
+                cap.release()
+                cap = None
+            else:
+                fh, fw = frame.shape[:2]
+                wide_side = fh if fh > fw else fw
+                self._focal_px = compute_focal(wide_side, HFOV_DEG)
+                log.info("[BRAIN] Frame %dx%d  focal=%.1fpx", fw, fh, self._focal_px)
+
+        # ── ESP32 socket (non-blocking: connect in background) ────────────
+        # Loop must start even if ESP32 absent. send() returns False until
+        # client connects; reconnect logic in RobotComms handles arrival.
         if self.use_socket:
-            self.comms.wait_for_esp32()
+            threading.Thread(
+                target=self.comms.wait_for_esp32,
+                name="esp32-initial-connect",
+                daemon=True,
+            ).start()
 
-        # ── Start web server + voice pipeline ─────────────────────────────
+        # ── Start web server + voice pipeline (degraded-mode tolerant) ────
+        # Each subsystem fails soft: web bridge / voice / mobile clients may
+        # be absent. Main CV loop must still reach cv2.imshow.
         if self.use_web:
-            self._web.start()
-            # Register REST API Flask blueprint (inject CommandQueue & RobotState)
             try:
-                from backend.api import create_api_blueprint
-                timeout_s = 5.0
-                waited_s = 0.0
-                step_s = 0.1
-                while self._web.app is None and waited_s < timeout_s:
-                    time.sleep(step_s)
-                    waited_s += step_s
+                self._web.start()
+            except Exception as web_exc:
+                log.warning("[BRAIN] Web server failed to start; continuing without web bridge: %s", web_exc)
+                self.use_web = False
+            else:
+                # Register REST API Flask blueprint (inject CommandQueue & RobotState)
+                try:
+                    from backend.api import create_api_blueprint
+                    timeout_s = 5.0
+                    waited_s = 0.0
+                    step_s = 0.1
+                    while self._web.app is None and waited_s < timeout_s:
+                        time.sleep(step_s)
+                        waited_s += step_s
 
-                if self._web.app is None:
-                    log.warning("[BRAIN] Web app not ready; skipping REST blueprint registration")
-                else:
-                    self._web.app.register_blueprint(create_api_blueprint(
-                        command_queue=getattr(self._pipeline, 'cmd_queue', None),
-                        robot_state=self._state
-                    ))
-            except Exception as api_exc:
-                log.warning(f"[BRAIN] Failed to register REST API blueprint: {api_exc}")
-        self._pipeline.start()
+                    if self._web.app is None:
+                        log.warning("[BRAIN] Web app not ready; skipping REST blueprint registration")
+                    else:
+                        self._web.app.register_blueprint(create_api_blueprint(
+                            command_queue=getattr(self._pipeline, 'cmd_queue', None),
+                            robot_state=self._state
+                        ))
+                except Exception as api_exc:
+                    log.warning(f"[BRAIN] Failed to register REST API blueprint: {api_exc}")
+        try:
+            self._pipeline.start()
+        except Exception as voice_exc:
+            log.warning("[BRAIN] Voice pipeline failed to start; continuing without voice: %s", voice_exc)
+
+        # ── Thread supervisor: register helper threads for auto-restart ────
+        # Note: voice_pipeline + command_queue already self-start a daemon
+        # thread on construction. The supervisor monitors *separate* non-daemon
+        # threads via the *_factory() methods so a crash is recoverable.
+        try:
+            sup = ThreadSupervisor()
+            sup.register("cmd-queue", self._pipeline.cmd_queue.executor_thread_factory)
+            sup.register("voice-pipeline", self._pipeline.thread_factory)
+            if self.use_web:
+                sup.register("state-pusher", self._web.state_pusher_factory)
+            sup.start()
+            self._supervisor = sup
+            log.info("[BRAIN] ThreadSupervisor started: %s", list(sup.status().keys()))
+        except Exception as sup_exc:
+            log.warning("[BRAIN] Failed to start ThreadSupervisor: %s", sup_exc)
 
         print("\n[BRAIN] Running.  Hotkeys: q=quit  1=LFR  2=Human  3=VLA  0=Idle")
         if not self.use_wake_word:
@@ -460,6 +542,18 @@ class RobotBrain:
         try:
             while True:
                 try:
+                    if cap is None:
+                        # Degraded mode: no camera. Voice + manual still work via
+                        # the voice pipeline + ESP32 bridge; just idle here.
+                        time.sleep(0.2)
+                        try:
+                            key = cv2.waitKey(1) & 0xFF
+                            if key == ord("q"):
+                                break
+                        except Exception:
+                            pass
+                        continue
+
                     ret, frame = cap.read()
                     if not ret:
                         log.warning("[BRAIN] Frame read failed – retrying…")
@@ -513,6 +607,7 @@ class RobotBrain:
                                 (10, frame.shape[0] - 30), size=0.7, color=_CLR_RED
                             )
                         except Exception:
+                            log.exception("[BRAIN] Failed to draw CV error overlay")
                             # Even drawing failed, use last good frame if available
                             display = last_good_frame if last_good_frame is not None else frame
 
@@ -542,6 +637,7 @@ class RobotBrain:
                         try:
                             cv2.imshow("Robot Brain", display)
                         except Exception:
+                            log.exception("[BRAIN] cv2.imshow failed; falling back to pygame")
                             # Fallback to pygame if cv2.imshow fails (e.g. no GUI backend)
                             from pygame_preview import pygame_bgr_preview
                             pygame_bgr_preview(display, window_name="Robot Brain (Pygame Fallback)")
@@ -601,11 +697,15 @@ class RobotBrain:
             try:
                 self._send("S")  # Emergency stop
                 self._state.ptt_active = False
-                cap.release()
+                if cap is not None:
+                    cap.release()
+                if self._supervisor is not None:
+                    self._supervisor.stop()
                 if self.use_socket:
-                    self.comms.close()
+                    self.comms.stop()
                 if self.use_web:
                     self._web.stop()
+                tts_module.shutdown_all()
                 cv2.destroyAllWindows()
                 log.info("[BRAIN] Shutdown complete.")
             except Exception as exc:
@@ -632,8 +732,11 @@ def _parse_args() -> argparse.Namespace:
                    help="Use laptop webcam (device 1) instead of /dev/video2")
     p.add_argument("--model", default="gemma4-e2b-nothink:latest",
                    help="Ollama model for VLA mode (default: gemma4-e2b-nothink:latest)")
-    p.add_argument("--sensitivity", type=float, default=0.6,
-                   help="Wake word sensitivity (0.0 to 1.0, default: 0.6)")
+    p.add_argument("--sensitivity", type=float, default=0.5,
+                   help="Wake word sensitivity (0.0 to 1.0, default: 0.5)")
+    p.add_argument("--wake-keyword", default="alexa",
+                   choices=["alexa", "hey_jarvis", "hey_mycroft", "hey_marvin"],
+                   help="Wake word keyword (default: alexa)")
     p.add_argument("--stt-threshold", type=int, default=850,
                    help="Speech energy threshold (default: 850)")
     p.add_argument("--no-wake-word", action="store_true",
@@ -657,6 +760,7 @@ def main() -> None:
         use_web=not args.no_web,
         vla_model=args.model,
         wake_sens=args.sensitivity,
+        wake_keyword=args.wake_keyword,
         stt_threshold=args.stt_threshold,
         use_wake_word=not args.no_wake_word,
     )

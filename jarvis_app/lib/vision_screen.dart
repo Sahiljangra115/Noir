@@ -1,191 +1,143 @@
 import 'package:flutter/material.dart';
 import 'package:provider/provider.dart';
-import 'widgets/ios_widgets.dart';
 import 'services/socket_service.dart';
+import 'theme/app_theme.dart';
+import 'theme/tokens.dart';
+import 'widgets/hud.dart';
+import 'widgets/mjpeg_stream.dart';
 
 class VisionScreen extends StatelessWidget {
   const VisionScreen({super.key});
+
+  double _num(dynamic v) => v is num ? v.toDouble() : 0.0;
 
   @override
   Widget build(BuildContext context) {
     return Consumer<SocketService>(
       builder: (context, socket, child) {
         final state = socket.state;
-        final accel = state.imu['accel'] is Map<String, dynamic>
-            ? state.imu['accel'] as Map<String, dynamic>
+        final connected = socket.isConnected;
+        final accel = state.imu['accel'] is Map
+            ? Map<String, dynamic>.from(state.imu['accel'])
             : {'x': 0.0, 'y': 0.0, 'z': 0.0};
-        final gps = state.gps;
-        final accentColor = Theme.of(context).colorScheme.primary;
+        final ax = _num(accel['x']);
+        final ay = _num(accel['y']);
+        final az = _num(accel['z']);
+        final lat = _num(state.gps['lat']);
+        final lon = _num(state.gps['lon']);
 
-        final accelX = _safeNum(accel['x']);
-        final accelY = _safeNum(accel['y']);
-        final accelZ = _safeNum(accel['z']);
-        final gpsLat = _safeNum(gps['lat']);
-        final gpsLon = _safeNum(gps['lon']);
-
-        return Scaffold(
-          extendBody: true,
-          extendBodyBehindAppBar: true,
-          appBar: AppBar(title: const Text('V I S I O N')),
-          body: Container(
-            width: double.infinity,
-            height: double.infinity,
-            decoration: const BoxDecoration(
-              gradient: RadialGradient(
-                colors: [Color(0xFF0A1A24), Color(0xFF000000)],
-                center: Alignment.center,
-                radius: 1.2,
-              ),
-            ),
-            child: SafeArea(
-              child: Padding(
-                padding: const EdgeInsets.all(24.0),
-                child: Column(
-                  crossAxisAlignment: CrossAxisAlignment.start,
+        return HudScreen(
+          title: 'Vision',
+          connected: connected,
+          children: [
+            const HudLabel('OPTICAL FEED'),
+            const SizedBox(height: Spacing.sm),
+            Container(
+              decoration: BoxDecoration(border: Border.all(color: Hud.lineHi)),
+              child: AspectRatio(
+                aspectRatio: 16 / 9,
+                child: Stack(
+                  fit: StackFit.expand,
                   children: [
-                    const SizedBox(height: 10),
-                    Row(
-                      mainAxisAlignment: MainAxisAlignment.spaceBetween,
-                      children: [
-                        const Text(
-                          'TELEMETRY FEED',
-                          style: TextStyle(
-                            color: Colors.white24,
-                            fontSize: 10,
-                            letterSpacing: 2,
-                            fontWeight: FontWeight.w200,
-                          ),
-                        ),
-                        Container(
-                          padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 4),
-                          decoration: BoxDecoration(
-                            color: socket.isConnected ? accentColor.withOpacity(0.1) : Colors.red.withOpacity(0.1),
-                            borderRadius: BorderRadius.circular(20),
-                            border: Border.all(
-                              color: (socket.isConnected ? accentColor : Colors.red).withOpacity(0.2),
-                              width: 0.5,
+                    Container(
+                      color: Colors.black,
+                      child: connected
+                          ? MjpegStream(
+                              url: '${socket.host}/frame',
+                              authToken: socket.token,
+                              fit: BoxFit.cover,
+                            )
+                          : const Center(
+                              child: Column(
+                                mainAxisSize: MainAxisSize.min,
+                                children: [
+                                  Icon(Icons.videocam_off_outlined,
+                                      color: Hud.textDim, size: 40),
+                                  SizedBox(height: Spacing.sm),
+                                  HudLabel('NO SIGNAL', color: Hud.textDim),
+                                ],
+                              ),
                             ),
-                          ),
-                          child: Row(
-                            children: [
-                              Container(
-                                width: 5,
-                                height: 5,
-                                decoration: BoxDecoration(
-                                  color: socket.isConnected ? accentColor : Colors.red,
-                                  shape: BoxShape.circle,
-                                ),
-                              ),
-                              const SizedBox(width: 6),
-                              Text(
-                                socket.isConnected ? 'LIVE' : 'OFFLINE',
-                                style: TextStyle(
-                                  color: socket.isConnected ? accentColor : Colors.red,
-                                  fontSize: 9,
-                                  fontWeight: FontWeight.bold,
-                                  letterSpacing: 1,
-                                ),
-                              ),
-                            ],
-                          ),
-                        ),
-                      ],
                     ),
-                    const SizedBox(height: 30),
-                    GlassCard(
-                      padding: const EdgeInsets.all(24),
-                      child: Column(
+                    // HUD overlay: crosshair + corner ticks
+                    IgnorePointer(
+                      child: CustomPaint(
+                        painter: _FeedOverlay(connected),
+                        size: Size.infinite,
+                      ),
+                    ),
+                    Positioned(
+                      left: 8,
+                      top: 8,
+                      child: Row(
                         children: [
-                          _buildTelemetryItem(
-                            'IMU ORIENTATION',
-                            'X: ${accelX.toStringAsFixed(2)}  Y: ${accelY.toStringAsFixed(2)}  Z: ${accelZ.toStringAsFixed(2)}',
-                            Icons.explore_outlined,
-                          ),
-                          const Padding(
-                            padding: EdgeInsets.symmetric(vertical: 20),
-                            child: Divider(color: Colors.white10, height: 1),
-                          ),
-                          _buildTelemetryItem(
-                            'GPS COORDINATES',
-                            'LAT: ${gpsLat.toStringAsFixed(4)}  LON: ${gpsLon.toStringAsFixed(4)}',
-                            Icons.location_on_outlined,
-                          ),
+                          HudLed(on: connected, size: 7),
+                          const SizedBox(width: 6),
+                          HudLabel(connected ? 'LIVE' : 'OFFLINE',
+                              color: connected ? Hud.green : Hud.red, size: 9),
                         ],
                       ),
                     ),
-                    const Spacer(),
-                    Center(
-                      child: Column(
-                        children: [
-                          Icon(Icons.videocam_off_outlined, color: Colors.white.withOpacity(0.15), size: 48),
-                          const SizedBox(height: 16),
-                          Text(
-                            'ENCRYPTED VIDEO LINK STANDBY',
-                            style: TextStyle(
-                              color: Colors.white.withOpacity(0.15),
-                              fontSize: 10,
-                              letterSpacing: 2,
-                              fontWeight: FontWeight.w200,
-                            ),
-                          ),
-                          const SizedBox(height: 4),
-                          Text(
-                            'Optimizing bandwidth for VLA processing',
-                            style: TextStyle(
-                              color: Colors.white.withOpacity(0.1),
-                              fontSize: 9,
-                            ),
-                          ),
-                        ],
-                      ),
-                    ),
-                    const Spacer(),
-                    const SizedBox(height: 100),
                   ],
                 ),
               ),
             ),
-          ),
-          bottomNavigationBar: FloatingNav(
-            currentIndex: 2,
-            onTap: (index) {
-              if (index == 0) Navigator.pushReplacementNamed(context, '/');
-              if (index == 1) Navigator.pushReplacementNamed(context, '/control');
-              if (index == 3) Navigator.pushReplacementNamed(context, '/settings');
-            },
-          ),
+            const SizedBox(height: Spacing.lg),
+
+            HudPanel(
+              label: 'TELEMETRY',
+              child: Column(
+                children: [
+                  HudReadout('IMU·X', ax.toStringAsFixed(2)),
+                  HudReadout('IMU·Y', ay.toStringAsFixed(2)),
+                  HudReadout('IMU·Z', az.toStringAsFixed(2)),
+                  const SizedBox(height: 6),
+                  HudReadout('GPS·LAT', lat.toStringAsFixed(5)),
+                  HudReadout('GPS·LON', lon.toStringAsFixed(5)),
+                  const SizedBox(height: 6),
+                  HudReadout('MODE', state.mode, valueColor: Hud.amber),
+                ],
+              ),
+            ),
+          ],
         );
       },
     );
   }
+}
 
-  double _safeNum(dynamic value) {
-    if (value is num) return value.toDouble();
-    return 0.0;
-  }
+class _FeedOverlay extends CustomPainter {
+  final bool active;
+  const _FeedOverlay(this.active);
 
-  Widget _buildTelemetryItem(String label, String value, IconData icon) {
-    return Row(
-      children: [
-        Icon(icon, color: Colors.white24, size: 20),
-        const SizedBox(width: 16),
-        Column(
-          crossAxisAlignment: CrossAxisAlignment.start,
-          children: [
-            Text(label, style: const TextStyle(color: Colors.white38, fontSize: 9, letterSpacing: 1.5)),
-            const SizedBox(height: 6),
-            Text(
-              value,
-              style: const TextStyle(
-                color: Colors.white,
-                fontSize: 15,
-                fontFamily: 'monospace',
-                fontWeight: FontWeight.w300,
-              ),
-            ),
-          ],
-        ),
+  @override
+  void paint(Canvas canvas, Size size) {
+    final c = size.center(Offset.zero);
+    final p = Paint()
+      ..color = (active ? Hud.amber : Hud.textDim).withValues(alpha: 0.5)
+      ..strokeWidth = 1;
+    // center reticle
+    canvas.drawLine(Offset(c.dx - 12, c.dy), Offset(c.dx - 4, c.dy), p);
+    canvas.drawLine(Offset(c.dx + 4, c.dy), Offset(c.dx + 12, c.dy), p);
+    canvas.drawLine(Offset(c.dx, c.dy - 12), Offset(c.dx, c.dy - 4), p);
+    canvas.drawLine(Offset(c.dx, c.dy + 4), Offset(c.dx, c.dy + 12), p);
+    // corner ticks
+    const m = 8.0, len = 14.0;
+    for (final corner in [
+      [const Offset(m, m), const Offset(len, 0), const Offset(0, len)],
+      [Offset(size.width - m, m), const Offset(-len, 0), const Offset(0, len)],
+      [Offset(m, size.height - m), const Offset(len, 0), const Offset(0, -len)],
+      [
+        Offset(size.width - m, size.height - m),
+        const Offset(-len, 0),
+        const Offset(0, -len)
       ],
-    );
+    ]) {
+      canvas.drawLine(corner[0], corner[0] + corner[1], p);
+      canvas.drawLine(corner[0], corner[0] + corner[2], p);
+    }
   }
+
+  @override
+  bool shouldRepaint(_FeedOverlay old) => old.active != active;
 }

@@ -34,6 +34,7 @@ Usage (wired in main.py):
     web.start()
     pipeline.start()
 """
+import json
 import logging
 import queue
 import threading
@@ -46,6 +47,8 @@ from functools import wraps
 import cv2
 import numpy as np
 from dotenv import load_dotenv
+
+from backend.config import config
 
 # Load environment variables from .env
 load_dotenv()
@@ -72,7 +75,7 @@ def require_auth(f):
             log.error("[WEB] JARVIS_SECRET_KEY is not configured")
             return jsonify({"status": "error", "msg": "Server auth misconfigured"}), 503
         if not token:
-            log.warning("[WEB] Missing auth header from %s", request.remote_addr)
+            log.debug("[WEB] Missing auth header from %s", request.remote_addr)
             return jsonify({"status": "error", "msg": "Unauthorized"}), 401
         if not hmac.compare_digest(token, f"Bearer {expected}"):
             log.warning("[WEB] Unauthorized REST access attempt from %s", request.remote_addr)
@@ -144,27 +147,13 @@ class WebServer:
             return
 
         try:
-            # Performance optimization: avoid re-encoding identical frames
-            frame_hash = hash(frame.data.tobytes())
-            if frame_hash == self._last_frame_hash and self._cached_frame_bytes:
-                with self._frame_lock:
-                    self._frame_bytes = self._cached_frame_bytes
-                return
-
-            # Encode new frame
             success, buf = cv2.imencode(".jpg", frame, [cv2.IMWRITE_JPEG_QUALITY, 70])
             if not success:
                 log.warning("[WEB] Frame encoding failed")
                 return
 
-            frame_bytes = buf.tobytes()
-
-            # Cache the result
-            self._last_frame_hash = frame_hash
-            self._cached_frame_bytes = frame_bytes
-
             with self._frame_lock:
-                self._frame_bytes = frame_bytes
+                self._frame_bytes = buf.tobytes()
 
         except Exception as exc:
             log.error("[WEB] Frame processing error: %s", exc)
@@ -214,7 +203,7 @@ class WebServer:
             except (TypeError, ValueError):
                 return {"status": "error", "msg": "invalid duration"}, 400
 
-            duration = max(0.1, min(duration, 5.0))
+            duration = max(0.1, min(duration, config.MOVE_MAX_DURATION_S))
 
             if cmd_char and cmd_char in "FBLRS":
                 self._comms.send(cmd_char)
@@ -257,12 +246,22 @@ class WebServer:
 
     def _state_pusher(self) -> None:
         while self._running:
-            time.sleep(0.3)
+            time.sleep(0.1)
             if self._sio is not None and self._state.phone_connected:
                 try:
                     self._sio.emit("state_update", self._full_snapshot())
                 except Exception as exc:
                     log.debug("[WEB] state_update emit error: %s", exc)
+
+    def state_pusher_factory(self) -> threading.Thread:
+        """Return a fresh non-daemon Thread running the periodic state push.
+
+        For ThreadSupervisor registration. Must only be called after
+        ``start()`` has been called and the server has begun serving.
+        """
+        return threading.Thread(
+            target=self._state_pusher, daemon=False, name="state-pusher"
+        )
 
     # ── Flask + SocketIO main ─────────────────────────────────────────────────
 
@@ -283,7 +282,7 @@ class WebServer:
         limiter = Limiter(
             get_remote_address,
             app=app,
-            default_limits=["200 per day", "50 per hour"],
+            default_limits=["10000 per hour"],
             storage_uri="memory://",
         )
 
@@ -317,6 +316,7 @@ class WebServer:
             return render_template_string(_HTML)
 
         @app.route("/status")
+        @limiter.exempt
         @require_auth
         def status():
             return jsonify(self._full_snapshot())
@@ -325,9 +325,36 @@ class WebServer:
         @require_auth
         @limiter.limit("5 per second")
         def command():
+            cl = request.content_length
+            if cl is not None and cl > 1_000_000:
+                return jsonify({"status": "error", "msg": "payload too large"}), 413
             data     = request.get_json(silent=True) or {}
             body, status = self._handle_command_payload(data)
             return jsonify(body), status
+
+        @app.route("/frame")
+        @require_auth
+        def frame_stream():
+            """MJPEG stream at ~15 fps consumed by the Flutter MjpegStream widget."""
+            self._has_clients = True
+
+            def _generate():
+                while True:
+                    with self._frame_lock:
+                        jpg = self._frame_bytes
+                    if jpg:
+                        yield (
+                            b"--frame\r\n"
+                            b"Content-Type: image/jpeg\r\n"
+                            b"Content-Length: " + str(len(jpg)).encode() + b"\r\n\r\n"
+                            + jpg + b"\r\n"
+                        )
+                    time.sleep(1 / 15)
+
+            return Response(
+                _generate(),
+                mimetype="multipart/x-mixed-replace; boundary=frame",
+            )
 
         # ── SocketIO events ───────────────────────────────────────────────────
 
@@ -375,17 +402,19 @@ class WebServer:
             512 samples per chunk = 1024 bytes = 32 ms of audio.
             Drop oldest if queue is full to avoid growing latency.
             """
-            if isinstance(data, (bytes, bytearray)):
-                raw = bytes(data)
-                if self._audio_queue.full():
-                    try:
-                        self._audio_queue.get_nowait()
-                    except queue.Empty:
-                        pass
+            if not isinstance(data, (bytes, bytearray)) or len(data) > config.MAX_AUDIO_PAYLOAD_BYTES:
+                emit("audio_error", {"reason": "oversize_or_wrong_type"})
+                return
+            raw = bytes(data)
+            if self._audio_queue.full():
                 try:
-                    self._audio_queue.put_nowait(raw)
-                except queue.Full:
+                    self._audio_queue.get_nowait()
+                except queue.Empty:
                     pass
+            try:
+                self._audio_queue.put_nowait(raw)
+            except queue.Full:
+                pass
 
         @sio.on("sensor_data")
         def on_sensor_data(data):
@@ -395,14 +424,24 @@ class WebServer:
               gps: {lat, lon, alt, speed}
             }
             """
-            if isinstance(data, dict):
-                if "imu" in data:
-                    self._state.imu = data["imu"]
-                if "gps" in data:
-                    self._state.gps = data["gps"]
+            if not isinstance(data, dict):
+                emit("sensor_error", {"reason": "wrong_type"})
+                return
+            try:
+                payload_len = len(json.dumps(data, default=str))
+            except (TypeError, ValueError):
+                emit("sensor_error", {"reason": "unserializable"})
+                return
+            if payload_len > config.MAX_SENSOR_PAYLOAD_BYTES:
+                emit("sensor_error", {"reason": "oversize"})
+                return
+            if "imu" in data:
+                self._state.imu = data["imu"]
+            if "gps" in data:
+                self._state.gps = data["gps"]
 
         @sio.on("force_listen")
-        def on_force_listen():
+        def on_force_listen(data=None):
             """Arc reactor tap — skip Porcupine for one cycle."""
             log.info("[WEB] force_listen received.")
             if self._voice_pipeline is not None:
@@ -418,10 +457,8 @@ class WebServer:
             body["http_status"] = status
             emit("command_ack", body)
 
-        # ── Start state pusher thread ──────────────────────────────────────
-        threading.Thread(
-            target=self._state_pusher, daemon=True, name="state-pusher"
-        ).start()
+        # ── State pusher thread is managed by ThreadSupervisor in main.py ──
+        # (see backend/main.py — supervisor.register("state-pusher", web.state_pusher_factory))
 
         # ── Run server (blocks this daemon thread) ─────────────────────────
         sio.run(

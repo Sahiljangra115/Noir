@@ -1,8 +1,10 @@
 import 'package:flutter/material.dart';
 import 'package:provider/provider.dart';
 import 'package:shared_preferences/shared_preferences.dart';
-import 'widgets/ios_widgets.dart';
 import 'services/socket_service.dart';
+import 'theme/app_theme.dart';
+import 'theme/tokens.dart';
+import 'widgets/hud.dart';
 
 class SettingsScreen extends StatefulWidget {
   const SettingsScreen({super.key});
@@ -24,165 +26,111 @@ class _SettingsScreenState extends State<SettingsScreen> {
   }
 
   @override
-  Widget build(BuildContext context) {
-    return Consumer<SocketService>(
-      builder: (context, socket, child) {
-        final accentColor = Theme.of(context).colorScheme.primary;
-
-        return Scaffold(
-          extendBody: true,
-          extendBodyBehindAppBar: true,
-          appBar: AppBar(title: const Text('S Y S T E M')),
-          body: Container(
-            width: double.infinity,
-            height: double.infinity,
-            decoration: const BoxDecoration(
-              gradient: RadialGradient(
-                colors: [Color(0xFF0A1A24), Color(0xFF000000)],
-                center: Alignment.center,
-                radius: 1.2,
-              ),
-            ),
-            child: SafeArea(
-              child: SingleChildScrollView(
-                padding: const EdgeInsets.symmetric(horizontal: 24.0),
-                child: Column(
-                  crossAxisAlignment: CrossAxisAlignment.start,
-                  children: [
-                    const SizedBox(height: 20),
-                    const Text('CONNECTIVITY', style: TextStyle(color: Colors.white24, fontSize: 10, letterSpacing: 2)),
-                    const SizedBox(height: 16),
-                    GlassCard(
-                      padding: const EdgeInsets.all(24),
-                      child: Column(
-                        children: [
-                          _buildTextField('BRAIN IP ADDRESS', _hostController, Icons.lan_outlined, accentColor),
-                          const Padding(
-                            padding: EdgeInsets.symmetric(vertical: 20),
-                            child: Divider(color: Colors.white10, height: 1),
-                          ),
-                          _buildTextField('ACCESS TOKEN', _tokenController, Icons.vpn_key_outlined, accentColor, isSecret: true),
-                        ],
-                      ),
-                    ),
-                    const SizedBox(height: 32),
-                    SizedBox(
-                      width: double.infinity,
-                      height: 56,
-                      child: GestureDetector(
-                        onTap: () async {
-                          final host = _hostController.text.trim();
-                          final token = _tokenController.text.trim();
-
-                          if (host.isEmpty || !host.startsWith('http')) {
-                            if (!context.mounted) return;
-                            ScaffoldMessenger.of(context).showSnackBar(
-                              const SnackBar(
-                                content: Text('Enter a valid host, e.g. http://192.168.1.10:5000'),
-                                backgroundColor: Colors.redAccent,
-                              ),
-                            );
-                            return;
-                          }
-
-                          if (token.isEmpty) {
-                            if (!context.mounted) return;
-                            ScaffoldMessenger.of(context).showSnackBar(
-                              const SnackBar(
-                                content: Text('Access token is required.'),
-                                backgroundColor: Colors.redAccent,
-                              ),
-                            );
-                            return;
-                          }
-
-                          final prefs = await SharedPreferences.getInstance();
-                          await prefs.setString('jarvis_host', host);
-                          await prefs.setString('jarvis_token', token);
-
-                          socket.updateConfig(host, token);
-                          if (!context.mounted) return;
-                          ScaffoldMessenger.of(context).showSnackBar(
-                            const SnackBar(
-                              content: Text('System configuration synchronized.'),
-                              backgroundColor: Colors.blueGrey,
-                            ),
-                          );
-                        },
-                        child: GlassCard(
-                          padding: EdgeInsets.zero,
-                          borderRadius: 16,
-                          opacity: 0.1,
-                          child: Center(
-                            child: Text(
-                              'SYNCHRONIZE',
-                              style: TextStyle(color: accentColor, fontWeight: FontWeight.bold, letterSpacing: 2, fontSize: 13),
-                            ),
-                          ),
-                        ),
-                      ),
-                    ),
-                    const SizedBox(height: 40),
-                    const Text('MODEL INFO', style: TextStyle(color: Colors.white24, fontSize: 10, letterSpacing: 2)),
-                    const SizedBox(height: 16),
-                    GlassCard(
-                      padding: const EdgeInsets.all(20),
-                      borderRadius: 20,
-                      child: Row(
-                        children: [
-                          Icon(Icons.psychology_outlined, color: accentColor.withOpacity(0.5)),
-                          const SizedBox(width: 16),
-                          const Column(
-                            crossAxisAlignment: CrossAxisAlignment.start,
-                            children: [
-                              Text('VLA ENGINE', style: TextStyle(color: Colors.white38, fontSize: 9, letterSpacing: 1)),
-                              SizedBox(height: 4),
-                              Text('Gemma 4 (System Optimized)', style: TextStyle(color: Colors.white, fontSize: 13)),
-                            ],
-                          ),
-                        ],
-                      ),
-                    ),
-                    const SizedBox(height: 150),
-                  ],
-                ),
-              ),
-            ),
-          ),
-          bottomNavigationBar: FloatingNav(
-            currentIndex: 3,
-            onTap: (index) {
-              if (index == 0) Navigator.pushReplacementNamed(context, '/');
-              if (index == 1) Navigator.pushReplacementNamed(context, '/control');
-              if (index == 2) Navigator.pushReplacementNamed(context, '/vision');
-            },
-          ),
-        );
-      },
-    );
-  }
-
-  @override
   void dispose() {
     _hostController.dispose();
     _tokenController.dispose();
     super.dispose();
   }
 
-  Widget _buildTextField(String label, TextEditingController controller, IconData icon, Color accent, {bool isSecret = false}) {
+  void _toast(String msg, {bool error = false}) {
+    if (!mounted) return;
+    ScaffoldMessenger.of(context).showSnackBar(SnackBar(
+      content: Text(msg),
+      backgroundColor: error ? Hud.red : Hud.panelHi,
+    ));
+  }
+
+  Future<void> _sync(SocketService socket) async {
+    final host = _hostController.text.trim();
+    final token = _tokenController.text.trim();
+
+    if (host.isEmpty || !host.startsWith('http')) {
+      _toast('Enter a valid host, e.g. http://192.168.1.10:5000', error: true);
+      return;
+    }
+    if (token.isEmpty) {
+      _toast('Access token is required.', error: true);
+      return;
+    }
+
+    final prefs = await SharedPreferences.getInstance();
+    await prefs.setString('jarvis_host', host);
+    await prefs.setString('jarvis_token', token);
+    socket.updateConfig(host, token);
+    _toast('Configuration synchronized.');
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return Consumer<SocketService>(
+      builder: (context, socket, child) {
+        return HudScreen(
+          title: 'System',
+          connected: socket.isConnected,
+          children: [
+            HudPanel(
+              label: 'UPLINK',
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.stretch,
+                children: [
+                  _field('BRAIN IP ADDRESS', _hostController,
+                      Icons.lan_outlined, 'http://192.168.1.10:5000'),
+                  const SizedBox(height: Spacing.lg),
+                  _field('ACCESS TOKEN', _tokenController,
+                      Icons.vpn_key_outlined, 'bearer token',
+                      secret: true),
+                ],
+              ),
+            ),
+            const SizedBox(height: Spacing.lg),
+            HudButton(
+              label: 'SYNCHRONIZE',
+              icon: Icons.sync,
+              active: true,
+              expand: true,
+              height: 56,
+              onTap: () => _sync(socket),
+            ),
+            const SizedBox(height: Spacing.lg),
+            HudPanel(
+              label: 'CORE INFO',
+              child: Column(
+                children: [
+                  HudReadout('LINK', socket.isConnected ? 'ONLINE' : 'OFFLINE',
+                      valueColor: socket.isConnected ? Hud.green : Hud.red),
+                  const HudReadout('VLA ENGINE', 'GEMMA 4'),
+                  HudReadout('HOST', socket.host),
+                ],
+              ),
+            ),
+          ],
+        );
+      },
+    );
+  }
+
+  Widget _field(String label, TextEditingController controller, IconData icon,
+      String hint,
+      {bool secret = false}) {
     return Column(
       crossAxisAlignment: CrossAxisAlignment.start,
       children: [
-        Text(label, style: const TextStyle(color: Colors.white30, fontSize: 9, letterSpacing: 1.5)),
+        HudLabel(label, color: Hud.textDim, size: 9),
         TextField(
           controller: controller,
-          obscureText: isSecret,
-          style: const TextStyle(color: Colors.white, fontSize: 15, fontWeight: FontWeight.w300),
+          obscureText: secret,
+          cursorColor: Hud.amber,
+          style: const TextStyle(
+              color: Hud.textHi, fontSize: 14, fontFamily: Hud.mono),
           decoration: InputDecoration(
-            border: InputBorder.none,
-            icon: Icon(icon, color: Colors.white24, size: 20),
-            hintText: 'Enter value...',
-            hintStyle: TextStyle(color: Colors.white.withOpacity(0.1), fontSize: 14),
+            isDense: true,
+            icon: Icon(icon, color: Hud.textMid, size: 18),
+            hintText: hint,
+            hintStyle: const TextStyle(color: Hud.textDim, fontSize: 13),
+            enabledBorder: const UnderlineInputBorder(
+                borderSide: BorderSide(color: Hud.line)),
+            focusedBorder: const UnderlineInputBorder(
+                borderSide: BorderSide(color: Hud.amber)),
           ),
         ),
       ],

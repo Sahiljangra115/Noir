@@ -47,3 +47,15 @@ Learning.txt
 API-LEARNINGS.txt
 camera_phone_webcam.txt
 WhatsApp Image*.jpeg
+
+# Auto-added by cleanup script
+*.pyc
+.gemini/
+.playwright-mcp/
+graphify-out/
+backend/graphify-out/
+venv/
+env/
+node_modules/
+a.out
+*.log

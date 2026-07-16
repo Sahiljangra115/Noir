@@ -35,6 +35,7 @@ Arm control (requires physical arm on ESP32):
 
 import json
 import logging
+import random
 import re
 import time
 from typing import List, Literal, Union, Annotated
@@ -42,7 +43,36 @@ from typing import List, Literal, Union, Annotated
 import requests
 from pydantic import BaseModel, Field
 
+from backend.config import config
+
 log = logging.getLogger(__name__)
+
+
+def _post_with_retry(url: str, *, json: dict, timeout: float, retries: int, base: float):
+    """POST with exponential backoff + jitter on Timeout/ConnectionError/5xx.
+
+    Raises the last network exception if all retries fail.
+    """
+    last_exc: Exception | None = None
+    for attempt in range(retries + 1):
+        try:
+            return requests.post(url, json=json, timeout=timeout)
+        except (requests.Timeout, requests.ConnectionError) as exc:
+            last_exc = exc
+            if attempt == retries:
+                break
+            delay = base * (2 ** attempt) + random.uniform(0, base)
+            log.warning("[LLM] retry %d/%d after %.2fs: %s", attempt + 1, retries, delay, exc)
+            time.sleep(delay)
+        except requests.HTTPError as exc:
+            if 500 <= exc.response.status_code < 600 and attempt < retries:
+                delay = base * (2 ** attempt) + random.uniform(0, base)
+                log.warning("[LLM] retry on 5xx after %.2fs", delay)
+                time.sleep(delay)
+                continue
+            raise
+    assert last_exc is not None
+    raise last_exc
 
 # ── Action Models ─────────────────────────────────────────────────────────────
 
@@ -74,8 +104,10 @@ class LLMResponse(BaseModel):
     actions: List[RobotAction] = Field(default_factory=list)
 
 # ── Ollama endpoint ───────────────────────────────────────────────────────────
-_OLLAMA_URL    = "http://localhost:11434/api/generate"
-_DEFAULT_MODEL = "gemma4-e2b-nothink:latest"  # Upgraded to Gemma 4
+# Single source of truth: backend.config (env-driven). Falls back to the
+# documented Gemma 4 model / local Ollama if env is unset.
+_OLLAMA_URL    = config.OLLAMA_URL.rstrip("/") + "/api/generate"
+_DEFAULT_MODEL = config.OLLAMA_MODEL          # gemma4-e2b-nothink:latest
 _TIMEOUT_S     = 20          # s – give it more time for structured output
 
 
@@ -113,11 +145,12 @@ class LLMParser:
 
     # ── Public API ────────────────────────────────────────────────────────────
 
-    def parse(self, text: str, state_snapshot: dict) -> dict:
+    def parse(self, text: str, state_snapshot: dict, *, corr_id: str = "") -> dict:
         """
-        Send `text` + current robot state to Gemma 3, return parsed dict.
+        Send `text` + current robot state to Gemma 4, return parsed dict.
         Falls back to a safe idle response on any error.
         """
+        log.info("[LLM] parse request  corr_id=%s  text=%r", corr_id, text[:80])
         prompt = (
             _SYSTEM_PROMPT
             .replace("{mode}",      state_snapshot.get("mode",      "IDLE"))
@@ -139,7 +172,13 @@ class LLMParser:
 
         t0 = time.monotonic()
         try:
-            resp = requests.post(self.url, json=payload, timeout=_TIMEOUT_S)
+            resp = _post_with_retry(
+                self.url,
+                json=payload,
+                timeout=config.OLLAMA_TIMEOUT_S,
+                retries=config.OLLAMA_MAX_RETRIES,
+                base=config.OLLAMA_BACKOFF_BASE,
+            )
             resp.raise_for_status()
             full_data = resp.json()
             
@@ -157,6 +196,7 @@ class LLMParser:
             return self._fallback("I had a connection error.")
 
         elapsed = time.monotonic() - t0
+        log.info("[LLM] response received  corr_id=%s  elapsed=%.2fs", corr_id, elapsed)
         log.debug("[LLM] raw=%r  (%.2fs)", raw[:120], elapsed)
 
         return self._parse_json(raw)
@@ -187,7 +227,8 @@ class LLMParser:
                 partial = json.loads(raw)
                 speech = partial.get("speech", "I had trouble understanding that.")
                 return self._fallback(speech)
-            except:
+            except (ValueError, KeyError, TypeError, json.JSONDecodeError) as exc:
+                log.warning("LLM parse failed: %s", exc)
                 return self._fallback("I produced an invalid response.")
 
         log.debug(

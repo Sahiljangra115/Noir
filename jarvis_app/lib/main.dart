@@ -1,4 +1,5 @@
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
 import 'package:provider/provider.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 import 'home_screen.dart';
@@ -7,10 +8,18 @@ import 'vision_screen.dart';
 import 'settings_screen.dart';
 import 'services/socket_service.dart';
 import 'services/audio_service.dart';
+import 'theme/app_theme.dart';
+import 'utils/responsive.dart';
+import 'widgets/hud.dart';
 
 Future<void> main() async {
   WidgetsFlutterBinding.ensureInitialized();
-  
+  SystemChrome.setSystemUIOverlayStyle(const SystemUiOverlayStyle(
+    statusBarColor: Colors.transparent,
+    statusBarIconBrightness: Brightness.light,
+    systemNavigationBarColor: Hud.bg,
+  ));
+
   final socketService = SocketService();
   final prefs = await SharedPreferences.getInstance();
   final savedHost = prefs.getString('jarvis_host') ?? socketService.host;
@@ -19,8 +28,6 @@ Future<void> main() async {
   socketService.updateConfig(savedHost, savedToken);
 
   final audioService = AudioService(socketService);
-
-  // Start audio/telemetry pipeline
   audioService.start();
 
   runApp(
@@ -39,49 +46,77 @@ class JarvisApp extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
+    final theme = AppTheme.dark();
     return MaterialApp(
       title: 'JARVIS',
       debugShowCheckedModeBanner: false,
-      theme: ThemeData.dark().copyWith(
-        scaffoldBackgroundColor: Colors.black,
-        colorScheme: ColorScheme.fromSeed(
-          seedColor: const Color(0xFF00E5FF),
-          brightness: Brightness.dark,
-          surface: const Color(0xFF050505),
-        ),
-        textTheme: const TextTheme(
-          displayLarge: TextStyle(
-            color: Colors.white,
-            fontSize: 32,
-            fontWeight: FontWeight.w200,
-            letterSpacing: -0.5,
-          ),
-          bodyMedium: TextStyle(
-            color: Colors.white,
-            fontSize: 15,
-            fontWeight: FontWeight.w300,
-            height: 1.5,
-          ),
-        ),
-        appBarTheme: const AppBarTheme(
-          backgroundColor: Colors.transparent,
-          elevation: 0,
-          centerTitle: true,
-          titleTextStyle: TextStyle(
-            color: Colors.white,
-            fontSize: 14,
-            fontWeight: FontWeight.w200,
-            letterSpacing: 6,
-          ),
-        ),
-      ),
-      initialRoute: '/',
-      routes: {
-        '/': (context) => const HomeScreen(),
-        '/control': (context) => const ControlScreen(),
-        '/vision': (context) => const VisionScreen(),
-        '/settings': (context) => const SettingsScreen(),
-      },
+      theme: theme,
+      darkTheme: theme,
+      themeMode: ThemeMode.dark,
+      home: const _AppShell(),
     );
+  }
+}
+
+/// Root shell that owns the nav index and switches pages.
+class _AppShell extends StatefulWidget {
+  const _AppShell();
+
+  @override
+  State<_AppShell> createState() => _AppShellState();
+}
+
+class _AppShellState extends State<_AppShell> {
+  int _index = 0;
+
+  static const _navItems = [
+    HudNavItem(icon: Icons.radar, label: 'Core'),
+    HudNavItem(icon: Icons.open_with, label: 'Control'),
+    HudNavItem(icon: Icons.videocam_outlined, label: 'Vision'),
+    HudNavItem(icon: Icons.tune, label: 'System'),
+  ];
+
+  static const _pages = <Widget>[
+    HomeScreen(),
+    ControlScreen(),
+    VisionScreen(),
+    SettingsScreen(),
+  ];
+
+  @override
+  Widget build(BuildContext context) {
+    final useRail = context.ff != FormFactor.compact;
+
+    final body = AnimatedSwitcher(
+      duration: const Duration(milliseconds: 200),
+      child: KeyedSubtree(key: ValueKey(_index), child: _pages[_index]),
+    );
+
+    return Scaffold(
+      backgroundColor: Hud.bg,
+      resizeToAvoidBottomInset: true,
+      bottomNavigationBar: useRail
+          ? null
+          : HudNavBar(
+              items: _navItems, currentIndex: _index, onChanged: _onNav),
+      body: SafeArea(
+        bottom: false,
+        child: useRail
+            ? Row(
+                children: [
+                  HudRail(
+                      items: _navItems,
+                      currentIndex: _index,
+                      onChanged: _onNav),
+                  Expanded(child: body),
+                ],
+              )
+            : body,
+      ),
+    );
+  }
+
+  void _onNav(int i) {
+    if (i != _index) setState(() => _index = i);
   }
 }

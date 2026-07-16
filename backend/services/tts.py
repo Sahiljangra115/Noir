@@ -24,14 +24,34 @@ import logging
 import subprocess
 import threading
 import wave
+import weakref
 from pathlib import Path
+
+from backend.config import config
 
 log = logging.getLogger(__name__)
 
-# ── Default voice paths (amy-medium) ─────────────────────────────────────────
-_VOICES_DIR  = Path("/home/ladliju/piper-voices/amy")
-_MODEL_PATH  = _VOICES_DIR / "en_US-amy-medium.onnx"
-_CONFIG_PATH = _VOICES_DIR / "en_US-amy-medium.onnx.json"
+# ── Default voice paths (resolved from config) ───────────────────────────────
+# Empty when VOICE_ENABLED=0; PiperTTS._load() raises if used while unset.
+_MODEL_PATH  = Path(config.PIPER_MODEL) if config.PIPER_MODEL else Path("")
+_CONFIG_PATH = Path(config.PIPER_CONFIG) if config.PIPER_CONFIG else Path("")
+
+# ── Subprocess tracking for clean shutdown ───────────────────────────────────
+_active_processes: "weakref.WeakSet[subprocess.Popen]" = weakref.WeakSet()
+
+
+def shutdown_all() -> None:
+    """Terminate any TTS subprocesses still alive at process shutdown."""
+    for proc in list(_active_processes):
+        try:
+            if proc.poll() is None:
+                proc.terminate()
+                try:
+                    proc.wait(timeout=2)
+                except subprocess.TimeoutExpired:
+                    proc.kill()
+        except Exception as exc:
+            log.debug("[TTS] shutdown_all: %s", exc)
 
 
 class PiperTTS:
@@ -113,7 +133,8 @@ class PiperTTS:
     def _speak_sync(self, text: str) -> None:
         """Render speech and play via aplay (blocking)."""
         self._load()
-        assert self._voice is not None
+        if self._voice is None:
+            raise RuntimeError("[TTS] Piper voice failed to load")
 
         if not self._speak_lock.acquire(blocking=False):
             log.debug("[TTS] Skipped (already speaking): %s", text[:40])
@@ -171,14 +192,25 @@ class PiperTTS:
     def _play_on_laptop(self, wav_bytes: bytes) -> None:
         """Play audio on laptop speaker via aplay."""
         try:
-            # Explicitly set format and channels to avoid '# channels not specified' error
-            # Piper output is usually 16kHz mono PCM16
-            proc = subprocess.Popen(
+            # Piper output is 16kHz mono PCM16; aplay reads a full WAV via stdin.
+            with subprocess.Popen(
                 ["aplay", "--quiet", "-t", "wav", "-"],
                 stdin=subprocess.PIPE,
-                stderr=subprocess.DEVNULL,
-            )
-            proc.communicate(input=wav_bytes)
+                stdout=subprocess.DEVNULL,
+                stderr=subprocess.PIPE,
+            ) as proc:
+                _active_processes.add(proc)
+                try:
+                    proc.communicate(wav_bytes, timeout=10)
+                except subprocess.TimeoutExpired:
+                    proc.terminate()
+                    try:
+                        proc.wait(timeout=2)
+                    except subprocess.TimeoutExpired:
+                        proc.kill()
+                    log.warning("[TTS] aplay timeout; terminated")
+                if proc.returncode not in (0, None):
+                    log.warning("[TTS] aplay exited with %s", proc.returncode)
         except FileNotFoundError:
             log.error("[TTS] 'aplay' not found. Install: sudo apt install alsa-utils")
         except Exception as exc:

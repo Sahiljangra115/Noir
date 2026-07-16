@@ -1,168 +1,119 @@
+import 'dart:math' as math;
 import 'package:flutter/material.dart';
 import 'package:provider/provider.dart';
-import 'widgets/particle_visualizer.dart';
-import 'widgets/ios_widgets.dart';
 import 'services/socket_service.dart';
+import 'theme/app_theme.dart';
+import 'theme/tokens.dart';
+import 'widgets/hud.dart';
+import 'widgets/god_particle_orb.dart';
 
-class HomeScreen extends StatefulWidget {
+class HomeScreen extends StatelessWidget {
   const HomeScreen({super.key});
 
-  @override
-  State<HomeScreen> createState() => _HomeScreenState();
-}
+  static const _modes = ['IDLE', 'LFR', 'HUMAN_TRACK', 'VLA', 'MANUAL'];
 
-class _HomeScreenState extends State<HomeScreen> {
   @override
   Widget build(BuildContext context) {
     return Consumer<SocketService>(
       builder: (context, socket, child) {
         final state = socket.state;
-        final accentColor = Theme.of(context).colorScheme.primary;
+        final connected = socket.isConnected;
+        final currentMode =
+            _modes.contains(state.mode) ? state.mode : 'IDLE';
 
-        return Scaffold(
-          extendBody: true,
-          extendBodyBehindAppBar: true,
-          appBar: AppBar(
-            title: const Text('C O R E'),
-            actions: [
-              Container(
-                margin: const EdgeInsets.only(right: 20),
-                child: Center(
-                  child: Container(
-                    width: 8,
-                    height: 8,
-                    decoration: BoxDecoration(
-                      color: socket.isConnected ? accentColor : Colors.redAccent,
-                      shape: BoxShape.circle,
-                      boxShadow: [
-                        BoxShadow(
-                          color: (socket.isConnected ? accentColor : Colors.redAccent).withOpacity(0.5),
-                          blurRadius: 10,
-                          spreadRadius: 2,
+        return HudScreen(
+          title: 'Core',
+          connected: connected,
+          children: [
+            // Radar listen-reticle
+            LayoutBuilder(
+              builder: (ctx, c) {
+                final dim = math
+                    .min(c.maxWidth, MediaQuery.of(ctx).size.height * 0.42)
+                    .clamp(200.0, 360.0);
+                return Center(
+                  child: Column(
+                    children: [
+                      Semantics(
+                        button: true,
+                        label: connected
+                            ? 'Voice command. Tap to force-listen.'
+                            : 'Voice command. Connect first.',
+                        child: GodParticleOrb(
+                          active: connected,
+                          size: dim,
+                          onTap: () {
+                            if (connected) {
+                              socket.forceListen();
+                              return;
+                            }
+                            ScaffoldMessenger.of(context).showSnackBar(
+                              const SnackBar(
+                                content:
+                                    Text('Connect to JARVIS core first.'),
+                              ),
+                            );
+                          },
                         ),
-                      ],
-                    ),
+                      ),
+                      const SizedBox(height: Spacing.md),
+                      HudLabel(connected ? 'TAP TO LISTEN' : 'LINK OFFLINE',
+                          color: connected ? Hud.amber : Hud.red, size: 11),
+                    ],
                   ),
-                ),
-              ),
-            ],
-          ),
-          body: Container(
-            width: double.infinity,
-            height: double.infinity,
-            decoration: const BoxDecoration(
-              gradient: RadialGradient(
-                colors: [Color(0xFF0A1A24), Color(0xFF000000)],
-                center: Alignment.center,
-                radius: 1.2,
+                );
+              },
+            ),
+            const SizedBox(height: Spacing.xl),
+
+            // Mode selector
+            HudPanel(
+              label: 'MODE  ·  $currentMode',
+              child: HudModeSelector(
+                modes: _modes,
+                current: currentMode,
+                onSelect: (m) => socket.sendCommand('mode', m),
               ),
             ),
-            child: SafeArea(
-              bottom: false,
+            const SizedBox(height: Spacing.lg),
+
+            // Transcript + AI response
+            HudPanel(
+              label: 'COMMS',
               child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
                 children: [
-                  const Spacer(flex: 2),
-
-                  GestureDetector(
-                    onTap: () {
-                      if (socket.isConnected) {
-                        socket.forceListen();
-                        return;
-                      }
-                      ScaffoldMessenger.of(context).showSnackBar(
-                        const SnackBar(
-                          content: Text('Connect to JARVIS core first to use force-listen.'),
-                          backgroundColor: Colors.redAccent,
-                        ),
-                      );
-                    },
-                    child: Stack(
-                      alignment: Alignment.center,
-                      children: [
-                        Container(
-                          width: 200,
-                          height: 200,
-                          decoration: BoxDecoration(
-                            shape: BoxShape.circle,
-                            boxShadow: [
-                              BoxShadow(
-                                color: accentColor.withOpacity(0.1),
-                                blurRadius: 60,
-                                spreadRadius: 10,
-                              ),
-                            ],
-                          ),
-                        ),
-                        const ParticleVisualizer(),
-                      ],
+                  const HudLabel('HEARD', color: Hud.textDim),
+                  const SizedBox(height: 6),
+                  Text(
+                    state.lastHeard.isEmpty || state.lastHeard == '...'
+                        ? 'awaiting voice input'
+                        : '"${state.lastHeard}"',
+                    style: const TextStyle(
+                      color: Hud.textHi,
+                      fontSize: 15,
+                      height: 1.4,
+                      fontFamily: Hud.mono,
                     ),
                   ),
-
-                  const Spacer(flex: 2),
-
-                  Padding(
-                    padding: const EdgeInsets.symmetric(horizontal: 24.0),
-                    child: GlassCard(
-                      child: Column(
-                        crossAxisAlignment: CrossAxisAlignment.stretch,
-                        children: [
-                          Text(
-                            'TRANSCRIPT',
-                            style: TextStyle(
-                              color: Colors.white.withOpacity(0.3),
-                              fontSize: 10,
-                              fontWeight: FontWeight.w400,
-                              letterSpacing: 2,
-                            ),
-                          ),
-                          const SizedBox(height: 12),
-                          Text(
-                            state.lastHeard.isEmpty ? 'Waiting for voice...' : '"${state.lastHeard}"',
-                            style: TextStyle(
-                              fontSize: 17,
-                              fontWeight: FontWeight.w300,
-                              color: Colors.white.withOpacity(0.6),
-                              fontStyle: FontStyle.italic,
-                            ),
-                          ),
-                          const SizedBox(height: 32),
-                          Text(
-                            'AI RESPONSE',
-                            style: TextStyle(
-                              color: accentColor.withOpacity(0.6),
-                              fontSize: 10,
-                              fontWeight: FontWeight.w400,
-                              letterSpacing: 2,
-                            ),
-                          ),
-                          const SizedBox(height: 12),
-                          Text(
-                            state.jarvisResponse.isEmpty ? 'System standby.' : state.jarvisResponse,
-                            style: const TextStyle(
-                              fontSize: 16,
-                              fontWeight: FontWeight.w300,
-                              color: Colors.white,
-                              height: 1.4,
-                            ),
-                          ),
-                        ],
-                      ),
+                  const SizedBox(height: Spacing.lg),
+                  const HudLabel('JARVIS', color: Hud.textDim),
+                  const SizedBox(height: 6),
+                  Text(
+                    state.jarvisResponse.isEmpty
+                        ? 'system standby'
+                        : state.jarvisResponse,
+                    style: const TextStyle(
+                      color: Hud.amber,
+                      fontSize: 15,
+                      height: 1.45,
+                      fontFamily: Hud.mono,
                     ),
                   ),
-
-                  const SizedBox(height: 130),
                 ],
               ),
             ),
-          ),
-          bottomNavigationBar: FloatingNav(
-            currentIndex: 0,
-            onTap: (index) {
-              if (index == 1) Navigator.pushReplacementNamed(context, '/control');
-              if (index == 2) Navigator.pushReplacementNamed(context, '/vision');
-              if (index == 3) Navigator.pushReplacementNamed(context, '/settings');
-            },
-          ),
+          ],
         );
       },
     );

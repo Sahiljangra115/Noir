@@ -21,6 +21,8 @@ import queue
 import threading
 import time
 
+from backend.config import config
+
 log = logging.getLogger(__name__)
 
 # Arm command → single-char ESP32 code
@@ -45,7 +47,7 @@ class CommandQueue:
     def __init__(self, comms, robot_state) -> None:
         self._comms   = comms
         self._state   = robot_state
-        self._q: queue.Queue = queue.Queue()
+        self._q: queue.Queue = queue.Queue(maxsize=config.CMD_QUEUE_MAX)
         self._stop_event     = threading.Event()
 
         self._thread = threading.Thread(
@@ -54,16 +56,52 @@ class CommandQueue:
         self._thread.start()
         log.info("[QUEUE] Executor thread started.")
 
+    def executor_thread_factory(self) -> threading.Thread:
+        """Return a fresh non-daemon Thread running the executor loop.
+
+        For ThreadSupervisor registration. Each call returns a new (un-started)
+        Thread so a crashed executor can be replaced.
+        """
+        return threading.Thread(
+            target=self._executor_loop, daemon=False, name="cmd-queue"
+        )
+
     # ── Public API ─────────────────────────────────────────────────────────────
 
-    def push(self, action: dict) -> None:
-        """Enqueue a single action token."""
-        self._q.put(action)
+    def _put_drop_oldest(self, action: dict) -> None:
+        """Non-blocking enqueue with drop-oldest eviction when full."""
+        try:
+            self._q.put_nowait(action)
+        except queue.Full:
+            # Evict oldest then retry. The evict + put pair is not strictly
+            # atomic across producers, but the queue still respects maxsize
+            # (a concurrent put will hit Full and evict its own oldest).
+            try:
+                self._q.get_nowait()
+            except queue.Empty:
+                pass
+            log.warning(
+                "[QUEUE] dropped oldest action; queue full at %d",
+                self._q.maxsize,
+            )
+            try:
+                self._q.put_nowait(action)
+            except queue.Full:
+                # Pathological case — another producer refilled the queue
+                # between the get and put. Drop the new action rather than
+                # block, and surface it loudly.
+                log.error("[QUEUE] still full after eviction; dropping new action")
 
-    def push_all(self, actions: list[dict]) -> None:
+    def push(self, action: dict, *, corr_id: str = "") -> None:
+        """Enqueue a single action token."""
+        log.info("[QUEUE] Enqueue  corr_id=%s  action=%s", corr_id, action)
+        self._put_drop_oldest(action)
+
+    def push_all(self, actions: list[dict], *, corr_id: str = "") -> None:
         """Enqueue a list of action tokens (executed in order)."""
+        log.info("[QUEUE] Enqueue %d action(s)  corr_id=%s", len(actions), corr_id)
         for action in actions:
-            self._q.put(action)
+            self._put_drop_oldest(action)
 
     def clear(self) -> None:
         """
@@ -72,21 +110,21 @@ class CommandQueue:
         further actions will run.
         """
         cleared = 0
-        while not self._q.empty():
+        while True:
             try:
                 self._q.get_nowait()
-                cleared += 1
             except queue.Empty:
                 break
+            cleared += 1
         if cleared:
             log.info("[QUEUE] Cleared %d pending action(s).", cleared)
 
     # ── Executor ───────────────────────────────────────────────────────────────
 
     def _executor_loop(self) -> None:
-        while True:
+        while not self._stop_event.is_set():
             try:
-                action = self._q.get(timeout=0.5)
+                action = self._q.get(timeout=0.05)
             except queue.Empty:
                 continue
 
@@ -111,7 +149,7 @@ class CommandQueue:
         elif kind == "move":
             cmd      = action.get("cmd", "S").upper()
             duration = float(action.get("duration", 1.0))
-            duration = max(0.1, min(duration, 30.0))   # clamp 0.1–30 s
+            duration = max(0.1, min(duration, config.MOVE_MAX_DURATION_S))
 
             prev_mode = self._state.mode
             self._state.mode = "MANUAL"     # freeze CV loop during timed move

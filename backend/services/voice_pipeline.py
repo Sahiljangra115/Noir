@@ -31,16 +31,18 @@ import queue
 import re
 import time
 import threading
+from uuid import uuid4
 
-from .command_queue import CommandQueue
-from .llm_parser    import EMERGENCY_KEYWORDS, LLMParser
-from .stt           import WhisperSTT
-from .tts           import PiperTTS
-from .wake_word     import WakeWordDetector
+from .command_queue  import CommandQueue
+from .llm_parser     import EMERGENCY_KEYWORDS, LLMParser
+from .logging_setup  import set_corr_id
+from .stt            import WhisperSTT
+from .tts            import PiperTTS
+from .wake_word      import WakeWordDetector
 
 log = logging.getLogger(__name__)
 
-_DEFAULT_WAKEWORD = "jarvis"
+_DEFAULT_WAKEWORD = "alexa"
 
 # Pre-compile regex patterns for efficiency
 CUSTOM_RESPONSES_COMPILED = [
@@ -78,7 +80,7 @@ class VoicePipeline:
         comms,
         state,
         wakeword:      str = _DEFAULT_WAKEWORD,
-        wake_sensitivity: float = 0.6,
+        wake_sensitivity: float = 0.5,
         whisper_model: str = "tiny",
         llm_model:     str = "gemma4-e2b-nothink:latest",
         stt_threshold: int = 850,
@@ -100,6 +102,13 @@ class VoicePipeline:
         # Give TTS access to robot state for camera-based audio routing
         self.tts.set_robot_state(state)
 
+        # Eager warm-up: load Whisper + Piper in parallel so first request
+        # does not pay model-init cost (CUDA context + ONNX). 2-8s saved.
+        warm_stt = threading.Thread(target=self.stt._load, name="stt-warmup", daemon=True)
+        warm_tts = threading.Thread(target=self.tts._load, name="tts-warmup", daemon=True)
+        warm_stt.start()
+        warm_tts.start()
+
         print(
             f"[PIPELINE] Ready — wake word: '{wakeword if enable_wake_word else 'DISABLED'}' | "
             f"Whisper: {whisper_model} | LLM: {llm_model}"
@@ -112,6 +121,16 @@ class VoicePipeline:
         self._force_listen = threading.Event()
 
     # ── Public API ────────────────────────────────────────────────────────────
+
+    def thread_factory(self) -> threading.Thread:
+        """Build a fresh non-daemon Thread that runs the pipeline loop.
+
+        Used by ThreadSupervisor so a crashed pipeline thread can be replaced.
+        Each call returns a brand-new (un-started) Thread.
+        """
+        return threading.Thread(
+            target=self._loop, daemon=False, name="voice-pipeline"
+        )
 
     def start(self) -> None:
         """Spawn the pipeline as a daemon thread and return immediately."""
@@ -144,7 +163,7 @@ class VoicePipeline:
         self.conversation_active = False
         if self._enable_wake_word:
             self.tts.speak(
-                "Hey, I'm jarvis. Say 'Jarvis' to wake me, and 'bye' to end.", block=True
+                f"Hey, I'm jarvis. Say '{self.wakeword.keyword}' to wake me.", block=True
             )
         else:
             self.tts.speak(
@@ -158,31 +177,46 @@ class VoicePipeline:
                     if self._force_listen.is_set():
                         self._force_listen.clear()
                         log.info("[PIPELINE] Force-listen triggered from phone.")
-                        if self._enable_wake_word:
-                            self.conversation_active = True
-                            self.tts.speak("Listening. Say 'bye' when you're done.", block=False)
-                        else:
-                            self._conversation_cycle()
-                            # Discard any space bar events that queued up while processing
-                            self._force_listen.clear()
-                            continue
+                        # PTT path: one-shot, no welcome banter
+                        self._conversation_cycle()
+                        self.conversation_active = False
+                        self._force_listen.clear()
+                        continue
                     elif not self._enable_wake_word:
                         # Wake-word logic intentionally commented out for temporary
                         # push-to-talk testing mode (requested no access key).
                         # self.wakeword.wait_for_wakeword()
-                        time.sleep(0.05)
+                        self._force_listen.wait(timeout=0.05)
                         continue
                     else:
                         try:
-                            self.wakeword.wait_for_wakeword()
-                            self.conversation_active = True
-                            self.tts.speak("Listening. Say 'bye' when you're done.", block=False)
+                            with self._audio_lock:
+                                aq = self._audio_queue
+                            if aq is not None:
+                                # Phone connected — listen for wake word on phone audio.
+                                # PTT tap (force_listen) interrupts and falls through.
+                                detected = self.wakeword.wait_for_wakeword_from_queue(
+                                    aq, stop_event=self._force_listen
+                                )
+                                if not detected:
+                                    continue
+                            else:
+                                # No phone yet — poll briefly, retry. Avoids blocking on
+                                # laptop mic before phone connects.
+                                if self._force_listen.wait(timeout=0.2):
+                                    continue
+                                continue
                         except Exception as e:
                             log.error("[PIPELINE] Wake word failed, disabling: %s", e)
                             self._enable_wake_word = False
-                            self.tts.speak("Wake word failed. Holding space to talk.", block=True)
+                            self.tts.speak("Wake word failed. Tap the arc reactor to talk.", block=True)
                             continue
+                # ── One-shot conversation ──────────────────────────────────
+                # After wake (or PTT tap), run one cycle then return to wake-wait.
                 self._conversation_cycle()
+                self.conversation_active = False
+                self._force_listen.clear()
+                continue
             except Exception as exc:
                 log.error("[PIPELINE] Unhandled error: %s", exc, exc_info=True)
                 self.tts.speak("I hit an error. Ready again.")
@@ -190,13 +224,18 @@ class VoicePipeline:
     def _conversation_cycle(self) -> None:
         # Only run within active conversation mode
 
+        # ── 0. Correlation ID for this cycle ──────────────────────────────────
+        corr_id = uuid4().hex[:12]
+        set_corr_id(corr_id)
+        log.info("[PIPELINE] Conversation cycle started  corr_id=%s", corr_id)
+
         # ── 1. Transcribe — phone queue or laptop mic ─────────────────────────
         with self._audio_lock:
             aq = self._audio_queue
 
-        # PTT: If wake-word is disabled, use space bar as a signal to stop listening
+        # PTT: spacebar gate only for laptop mic. Phone tap = single-shot VAD window.
         ptt_cb = None
-        if not self._enable_wake_word:
+        if not self._enable_wake_word and aq is None:
             ptt_cb = lambda: self._state.ptt_active
 
         text = self.stt.listen_from_queue(aq, ptt_callback=ptt_cb) if aq is not None else self.stt.listen(ptt_callback=ptt_cb)
@@ -244,7 +283,7 @@ class VoicePipeline:
 
         # ── 6. LLM ───────────────────────────────────────────────────────────
         print(f"[PIPELINE] Sending to LLM: '{text}'")
-        result  = self.llm.parse(text, snapshot)
+        result  = self.llm.parse(text, snapshot, corr_id=corr_id)
         speech  = result.get("speech", "")
         actions = result.get("actions", [])
 
@@ -259,4 +298,12 @@ class VoicePipeline:
             self.tts.speak(speech, block=False)
 
         if actions:
-            self.cmd_queue.push_all(actions)
+            self.cmd_queue.push_all(actions, corr_id=corr_id)
+
+
+def voice_pipeline_thread_factory(pipeline: "VoicePipeline"):
+    """Module-level helper bound to a `VoicePipeline` instance.
+
+    Returns a callable suitable for `ThreadSupervisor.register(name, factory)`.
+    """
+    return pipeline.thread_factory

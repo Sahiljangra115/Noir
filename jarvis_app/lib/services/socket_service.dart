@@ -1,4 +1,3 @@
-import 'dart:typed_data';
 import 'package:flutter/foundation.dart';
 import 'package:socket_io_client/socket_io_client.dart' as IO;
 import '../models/robot_state.dart';
@@ -43,27 +42,27 @@ class SocketService extends ChangeNotifier {
       _isConnected = true;
       _connectionError = null;
       notifyListeners();
-      print('Connected to JARVIS Core');
+      debugPrint('Connected to JARVIS Core');
     });
 
     _socket?.onConnectError((data) {
       _isConnected = false;
       _connectionError = data.toString();
       notifyListeners();
-      print('Connection Error: $data');
+      debugPrint('Connection Error: $data');
     });
 
     _socket?.onConnectTimeout((data) {
       _isConnected = false;
       _connectionError = 'Connection Timeout';
       notifyListeners();
-      print('Connection Timeout');
+      debugPrint('Connection Timeout');
     });
 
     _socket?.onDisconnect((_) {
       _isConnected = false;
       notifyListeners();
-      print('Disconnected from JARVIS Core');
+      debugPrint('Disconnected from JARVIS Core');
     });
 
     _socket?.on('state_update', (data) {
