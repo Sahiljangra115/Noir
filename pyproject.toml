@@ -1,6 +1,6 @@
 [project]
 name = "final-year-project"
-version = "0.1.0"
+version = "0.4.0"
 description = "AI Assistant Bot – full STT→LLM→TTS+Actions pipeline with VLA vision and ESP32 motor control"
 readme = "README.md"
 requires-python = ">=3.12,<3.14"
@@ -13,7 +13,8 @@ dependencies = [
     "requests>=2.31",
     # ── Voice pipeline ───────────────────────────────────────────────────────
     "faster-whisper>=1.0",       # STT  – CUDA accelerated Whisper
-    "pvporcupine>=3.0",          # Wake word – Porcupine by Picovoice (jarvis, alexa, etc.)
+    "openwakeword>=0.4",         # Wake word – openWakeWord (hey_jarvis stock model, no key)
+    "onnxruntime>=1.20",         # openWakeWord inference backend (ONNX models, no tflite)
     "piper-tts>=1.4",            # TTS  – offline neural voices (amy-medium)
     "sounddevice>=0.4",          # Mic input + audio playback via PortAudio
     # Requires: sudo apt install portaudio19-dev
@@ -29,6 +30,11 @@ dependencies = [
 
 [project.scripts]
 robot = "main:main"
+
+[tool.uv]
+# openwakeword hard-requires tflite-runtime on linux, which has no cp312 wheel.
+# We run its ONNX path via onnxruntime instead, so drop tflite from resolution.
+override-dependencies = ["tflite-runtime ; sys_platform == 'never'"]
 
 [tool.pytest.ini_options]
 minversion = "6.0"

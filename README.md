@@ -25,7 +25,7 @@ All language model output is validated before any motor moves, and every network
 
 ## Features
 
-- **Voice pipeline.** Porcupine wake word, Faster-Whisper speech-to-text on CUDA, Gemma 4 reasoning through Ollama, and Piper text-to-speech.
+- **Voice pipeline.** openWakeWord wake word ("Hey Jarvis"), Faster-Whisper speech-to-text on CUDA, Gemma 4 reasoning through Ollama, and Piper text-to-speech.
 - **Vision and navigation.** YOLOv8 person tracking, a hybrid ML and OpenCV line follower, and a vision-language-action mode built on Gemma 4 vision.
 - **Mobile control.** A Flutter app with live telemetry, manual drive controls, and an MJPEG camera view.
 - **Resilient runtime.** A thread supervisor restarts crashed workers, the ESP32 link auto-reconnects, and a health check reports system state.
@@ -60,7 +60,7 @@ Three concurrent loops share a single thread-safe `RobotState`.
 | Layer      | Technology                                            |
 | ---------- | ----------------------------------------------------- |
 | Backend    | Python 3.12+, Flask-SocketIO, OpenCV, YOLOv8n         |
-| Voice      | Porcupine, Faster-Whisper (CUDA), Piper TTS           |
+| Voice      | openWakeWord, Faster-Whisper (CUDA), Piper TTS        |
 | Language   | Gemma 4 (`gemma4-e2b-nothink`) via Ollama             |
 | Vision ML  | MobileNetV2 (fine-tuned), PyTorch                     |
 | Mobile     | Flutter, socket_io_client, Provider, Material 3       |
@@ -106,7 +106,6 @@ Create a `.env` file in the project root. It is git-ignored and must never be co
 
 ```env
 JARVIS_SECRET_KEY=your_secure_token
-PORCUPINE_ACCESS_KEY=your_picovoice_access_key
 ```
 
 The config layer validates these on startup. A missing secret key returns `503` rather than running unprotected.
