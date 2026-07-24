@@ -1,6 +1,7 @@
 import 'package:flutter/material.dart';
 import 'package:provider/provider.dart';
 import 'package:shared_preferences/shared_preferences.dart';
+import 'config/app_config.dart';
 import 'services/socket_service.dart';
 import 'theme/app_theme.dart';
 import 'theme/tokens.dart';
@@ -54,8 +55,8 @@ class _SettingsScreenState extends State<SettingsScreen> {
     }
 
     final prefs = await SharedPreferences.getInstance();
-    await prefs.setString('jarvis_host', host);
-    await prefs.setString('jarvis_token', token);
+    await prefs.setString(AppConfig.prefsHostKey, host);
+    await prefs.setString(AppConfig.prefsTokenKey, token);
     socket.updateConfig(host, token);
     _toast('Configuration synchronized.');
   }

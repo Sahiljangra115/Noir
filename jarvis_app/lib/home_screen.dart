@@ -1,6 +1,7 @@
 import 'dart:math' as math;
 import 'package:flutter/material.dart';
 import 'package:provider/provider.dart';
+import 'config/app_config.dart';
 import 'services/socket_service.dart';
 import 'theme/app_theme.dart';
 import 'theme/tokens.dart';
@@ -10,16 +11,15 @@ import 'widgets/god_particle_orb.dart';
 class HomeScreen extends StatelessWidget {
   const HomeScreen({super.key});
 
-  static const _modes = ['IDLE', 'LFR', 'HUMAN_TRACK', 'VLA', 'MANUAL'];
-
   @override
   Widget build(BuildContext context) {
     return Consumer<SocketService>(
       builder: (context, socket, child) {
         final state = socket.state;
         final connected = socket.isConnected;
-        final currentMode =
-            _modes.contains(state.mode) ? state.mode : 'IDLE';
+        final currentMode = AppConfig.modes.contains(state.mode)
+            ? state.mode
+            : AppConfig.fallbackMode;
 
         return HudScreen(
           title: 'Core',
@@ -70,7 +70,7 @@ class HomeScreen extends StatelessWidget {
             HudPanel(
               label: 'MODE  ·  $currentMode',
               child: HudModeSelector(
-                modes: _modes,
+                modes: AppConfig.modes,
                 current: currentMode,
                 onSelect: (m) => socket.sendCommand('mode', m),
               ),

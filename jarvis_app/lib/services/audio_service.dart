@@ -2,6 +2,7 @@ import 'dart:async';
 import 'package:record/record.dart';
 import 'package:sensors_plus/sensors_plus.dart';
 import 'package:geolocator/geolocator.dart';
+import '../config/app_config.dart';
 import 'socket_service.dart';
 
 class AudioService {
@@ -17,7 +18,7 @@ class AudioService {
     if (await _recorder.hasPermission()) {
       final stream = await _recorder.startStream(const RecordConfig(
         encoder: AudioEncoder.pcm16bits,
-        sampleRate: 16000,
+        sampleRate: AppConfig.micSampleRate,
         numChannels: 1,
       ));
 

@@ -1,5 +1,6 @@
 import 'package:flutter/material.dart';
 import 'package:provider/provider.dart';
+import 'config/app_config.dart';
 import 'services/socket_service.dart';
 import 'theme/app_theme.dart';
 import 'theme/tokens.dart';
@@ -43,7 +44,7 @@ class VisionScreen extends StatelessWidget {
                       color: Colors.black,
                       child: connected
                           ? MjpegStream(
-                              url: '${socket.host}/frame',
+                              url: '${socket.host}${AppConfig.framePath}',
                               authToken: socket.token,
                               fit: BoxFit.cover,
                             )

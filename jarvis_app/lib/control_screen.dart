@@ -1,5 +1,6 @@
 import 'package:flutter/material.dart';
 import 'package:provider/provider.dart';
+import 'config/app_config.dart';
 import 'services/socket_service.dart';
 import 'theme/app_theme.dart';
 import 'theme/tokens.dart';
@@ -9,16 +10,14 @@ import 'widgets/hud.dart';
 class ControlScreen extends StatelessWidget {
   const ControlScreen({super.key});
 
-  static const _modes = ['IDLE', 'LFR', 'HUMAN_TRACK', 'VLA', 'MANUAL'];
-
   @override
   Widget build(BuildContext context) {
     return Consumer<SocketService>(
       builder: (context, socket, child) {
         final connected = socket.isConnected;
-        final currentMode = _modes.contains(socket.state.mode)
+        final currentMode = AppConfig.modes.contains(socket.state.mode)
             ? socket.state.mode
-            : 'IDLE';
+            : AppConfig.fallbackMode;
         final pad = (context.shortest * 0.18).clamp(60.0, 88.0);
 
         return HudScreen(
@@ -28,7 +27,7 @@ class ControlScreen extends StatelessWidget {
             HudPanel(
               label: 'MODE  ·  $currentMode',
               child: HudModeSelector(
-                modes: _modes,
+                modes: AppConfig.modes,
                 current: currentMode,
                 onSelect: (m) => socket.sendCommand('mode', m),
               ),

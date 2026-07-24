@@ -1,5 +1,6 @@
 import 'package:flutter/foundation.dart';
 import 'package:socket_io_client/socket_io_client.dart' as IO;
+import '../config/app_config.dart';
 import '../models/robot_state.dart';
 
 class SocketService extends ChangeNotifier {
@@ -8,7 +9,7 @@ class SocketService extends ChangeNotifier {
   bool _isConnected = false;
   String? _connectionError;
   
-  String _host = 'http://localhost:5000';
+  String _host = AppConfig.defaultHost;
   String _token = '';
 
   RobotState get state => _state;
@@ -65,7 +66,7 @@ class SocketService extends ChangeNotifier {
       debugPrint('Disconnected from JARVIS Core');
     });
 
-    _socket?.on('state_update', (data) {
+    _socket?.on(AppConfig.evStateUpdate, (data) {
       if (data != null && data is Map<String, dynamic>) {
         _state = RobotState.fromJson(data);
         notifyListeners();
@@ -77,29 +78,33 @@ class SocketService extends ChangeNotifier {
 
   void sendAudio(Uint8List data) {
     if (_isConnected) {
-      _socket?.emit('audio_data', data);
+      _socket?.emit(AppConfig.evAudioData, data);
     }
   }
 
   void sendTelemetry(Map<String, dynamic> data) {
     if (_isConnected) {
-      _socket?.emit('sensor_data', data);
+      _socket?.emit(AppConfig.evSensorData, data);
     }
   }
 
   void sendCommand(String type, dynamic value) {
     if (_isConnected) {
       if (type == 'mode') {
-        _socket?.emit('command', {'type': 'mode', 'value': value});
+        _socket?.emit(AppConfig.evCommand, {'type': 'mode', 'value': value});
       } else if (type == 'move') {
-        _socket?.emit('command', {'type': 'move', 'cmd': value, 'duration': 1.0});
+        _socket?.emit(AppConfig.evCommand, {
+          'type': 'move',
+          'cmd': value,
+          'duration': AppConfig.moveDurationSecs,
+        });
       }
     }
   }
 
   void forceListen() {
     if (_isConnected) {
-      _socket?.emit('force_listen', {});
+      _socket?.emit(AppConfig.evForceListen, {});
     }
   }
 

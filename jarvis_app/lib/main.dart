@@ -6,6 +6,7 @@ import 'home_screen.dart';
 import 'control_screen.dart';
 import 'vision_screen.dart';
 import 'settings_screen.dart';
+import 'config/app_config.dart';
 import 'services/socket_service.dart';
 import 'services/audio_service.dart';
 import 'theme/app_theme.dart';
@@ -22,8 +23,9 @@ Future<void> main() async {
 
   final socketService = SocketService();
   final prefs = await SharedPreferences.getInstance();
-  final savedHost = prefs.getString('jarvis_host') ?? socketService.host;
-  final savedToken = prefs.getString('jarvis_token') ?? '';
+  final savedHost =
+      prefs.getString(AppConfig.prefsHostKey) ?? socketService.host;
+  final savedToken = prefs.getString(AppConfig.prefsTokenKey) ?? '';
 
   socketService.updateConfig(savedHost, savedToken);
 
