@@ -72,7 +72,8 @@ class TestCompleteWorkflows:
         }
 
         # Mock command queue processing
-        def mock_command_processor(actions):
+        # push_all is called with a corr_id kwarg by the pipeline; accept and ignore it.
+        def mock_command_processor(actions, **kwargs):
             for action in actions:
                 if "MOVE_FORWARD" in action:
                     comms.send("F")

@@ -18,7 +18,7 @@ SocketIO events
   Phone → Laptop
     audio_data   binary   PCM16 LE, 16 kHz mono, 512-sample (1024-byte) chunks
     sensor_data  JSON     {imu:{accel:{x,y,z},gyro:{x,y,z}}, gps:{lat,lon,alt,speed}}
-    force_listen (empty)  arc reactor tap → skip Porcupine wake word
+    force_listen (empty)  arc reactor tap → skip the wake word for one cycle
 
   Laptop → Phone
     tts_audio    binary   raw WAV bytes (Piper output) — phone plays on speaker
@@ -55,6 +55,17 @@ load_dotenv()
 
 log = logging.getLogger(__name__)
 
+# Interval of the state_update broadcast to the phone. Documented in the module
+# header, the README and CLAUDE.md — keep all four in step if it changes.
+STATE_PUSH_INTERVAL_S = 0.3
+
+# MJPEG stream frame rate for GET /frame.
+FRAME_STREAM_FPS = 15
+
+# Modes the CV loop in backend/main.py dispatches on. Anything outside this set
+# would leave RobotBrain logging "Unknown mode" and holding the motors stopped.
+VALID_MODES = frozenset({"LFR", "HUMAN_TRACK", "VLA", "MANUAL", "IDLE"})
+
 # ── Lazy imports ──────────────────────────────────────────────────────────────
 _flask_ok = False
 try:
@@ -65,6 +76,18 @@ try:
     _flask_ok = True
 except ImportError:
     pass
+
+def _token_matches(presented, expected: str) -> bool:
+    """Constant-time token compare that tolerates hostile input.
+
+    ``hmac.compare_digest`` raises TypeError on non-ASCII ``str`` operands, so a
+    token with one accented character would surface as a 500 instead of a 401.
+    Comparing UTF-8 bytes keeps the timing property and answers every input.
+    """
+    if not isinstance(presented, str):
+        return False
+    return hmac.compare_digest(presented.encode("utf-8"), expected.encode("utf-8"))
+
 
 def require_auth(f):
     @wraps(f)
@@ -77,7 +100,7 @@ def require_auth(f):
         if not token:
             log.debug("[WEB] Missing auth header from %s", request.remote_addr)
             return jsonify({"status": "error", "msg": "Unauthorized"}), 401
-        if not hmac.compare_digest(token, f"Bearer {expected}"):
+        if not _token_matches(token, f"Bearer {expected}"):
             log.warning("[WEB] Unauthorized REST access attempt from %s", request.remote_addr)
             return jsonify({"status": "error", "msg": "Unauthorized"}), 401
         return f(*args, **kwargs)
@@ -109,11 +132,9 @@ class WebServer:
         # Frame buffer for optional MJPEG dashboard (browser only)
         self._frame_lock  = threading.Lock()
         self._frame_bytes: Optional[bytes] = None
-        self._has_clients = False  # Track if browser clients are connected
-
-        # Performance optimization: frame caching to avoid re-encoding identical frames
-        self._last_frame_hash: Optional[int] = None
-        self._cached_frame_bytes: Optional[bytes] = None
+        self._has_clients = False  # True while at least one /frame viewer is live
+        self._stream_clients = 0
+        self._stream_lock = threading.Lock()
 
         self._sio: Optional[object] = None
 
@@ -189,7 +210,7 @@ class WebServer:
 
         if typ == "mode":
             value = data.get("value", data.get("mode", "IDLE"))
-            if value in {"LFR", "HUMAN_TRACK", "VLA", "GOTO", "MANUAL", "IDLE"}:
+            if value in VALID_MODES:
                 self._state.mode = value
                 log.info("[WEB] Mode set to %s", value)
                 return {"status": "ok", "mode": value}, 200
@@ -206,8 +227,18 @@ class WebServer:
             duration = max(0.1, min(duration, config.MOVE_MAX_DURATION_S))
 
             if cmd_char and cmd_char in "FBLRS":
-                self._comms.send(cmd_char)
+                # A manual command only survives if the CV loop stops competing
+                # for the motors. In LFR/HUMAN_TRACK/VLA it recomputes a command
+                # every frame, and in IDLE it re-sends "S" — either way the
+                # driver pad was overridden ~50 ms after the tap. MANUAL makes
+                # the loop replay state.last_cmd instead, so the command holds.
+                # "S" additionally means stop, so it drops straight to IDLE.
+                if cmd_char == "S":
+                    self._state.mode = "IDLE"
+                else:
+                    self._state.mode = "MANUAL"
                 self._state.last_cmd = cmd_char
+                self._comms.send(cmd_char)
 
                 with self._move_lock:
                     if self._move_timer is not None:
@@ -216,6 +247,10 @@ class WebServer:
                     def _stop():
                         self._comms.send("S")
                         self._state.last_cmd = "S"
+                        # Only stand down if this timer's move is still the one
+                        # in charge; a newer command may have taken over.
+                        if self._state.mode == "MANUAL":
+                            self._state.mode = "IDLE"
 
                     self._move_timer = threading.Timer(duration, _stop)
                     self._move_timer.daemon = True
@@ -242,11 +277,11 @@ class WebServer:
         """RobotState.snapshot() now includes last_heard + jarvis_response."""
         return self._state.snapshot()
 
-    # ── Background state broadcast (300 ms) ──────────────────────────────────
+    # ── Background state broadcast ───────────────────────────────────────────
 
     def _state_pusher(self) -> None:
         while self._running:
-            time.sleep(0.1)
+            time.sleep(STATE_PUSH_INTERVAL_S)
             if self._sio is not None and self._state.phone_connected:
                 try:
                     self._sio.emit("state_update", self._full_snapshot())
@@ -269,14 +304,17 @@ class WebServer:
         import logging as _logging
         _logging.getLogger("werkzeug").setLevel(_logging.ERROR)
 
-        app = Flask(__name__)
-        self.app = app
-
         secret = os.getenv("JARVIS_SECRET_KEY")
         if not secret:
             log.error("[WEB] JARVIS_SECRET_KEY is not set; refusing to start web server")
+            self._running = False
             return
+
+        app = Flask(__name__)
         app.config["SECRET_KEY"] = secret
+        # Published only once the server is actually going to serve, so
+        # RobotBrain does not register its REST blueprint on a dead app.
+        self.app = app
 
         # Rate limiting to prevent command spamming
         limiter = Limiter(
@@ -312,7 +350,9 @@ class WebServer:
 
         @app.route("/")
         def index():
-            self._has_clients = True  # Browser client connected
+            # The dashboard shows telemetry only; it cannot embed /frame because
+            # an <img> tag cannot send the Bearer header. So it is not a frame
+            # consumer and must not switch JPEG encoding on in the CV loop.
             return render_template_string(_HTML)
 
         @app.route("/status")
@@ -335,21 +375,32 @@ class WebServer:
         @app.route("/frame")
         @require_auth
         def frame_stream():
-            """MJPEG stream at ~15 fps consumed by the Flutter MjpegStream widget."""
-            self._has_clients = True
+            """MJPEG stream consumed by the Flutter MjpegStream widget."""
 
             def _generate():
-                while True:
-                    with self._frame_lock:
-                        jpg = self._frame_bytes
-                    if jpg:
-                        yield (
-                            b"--frame\r\n"
-                            b"Content-Type: image/jpeg\r\n"
-                            b"Content-Length: " + str(len(jpg)).encode() + b"\r\n\r\n"
-                            + jpg + b"\r\n"
-                        )
-                    time.sleep(1 / 15)
+                # Encoding in push_frame is gated on there being a viewer, so
+                # the count has to come back down when the last one leaves.
+                with self._stream_lock:
+                    self._stream_clients += 1
+                    self._has_clients = True
+                try:
+                    # Bound by _running so shutdown does not leave one generator
+                    # thread per client spinning forever.
+                    while self._running:
+                        with self._frame_lock:
+                            jpg = self._frame_bytes
+                        if jpg:
+                            yield (
+                                b"--frame\r\n"
+                                b"Content-Type: image/jpeg\r\n"
+                                b"Content-Length: " + str(len(jpg)).encode() + b"\r\n\r\n"
+                                + jpg + b"\r\n"
+                            )
+                        time.sleep(1 / FRAME_STREAM_FPS)
+                finally:
+                    with self._stream_lock:
+                        self._stream_clients = max(0, self._stream_clients - 1)
+                        self._has_clients = self._stream_clients > 0
 
             return Response(
                 _generate(),
@@ -371,8 +422,8 @@ class WebServer:
                 token = auth.get("token")
             if not token:
                 token = request.args.get("token")
-                
-            if not token or not hmac.compare_digest(token, expected):
+
+            if not token or not _token_matches(token, expected):
                 log.warning("[WEB] Unauthorized SocketIO connection attempt from %s", request.remote_addr)
                 return False  # Refuse connection
 
@@ -442,7 +493,7 @@ class WebServer:
 
         @sio.on("force_listen")
         def on_force_listen(data=None):
-            """Arc reactor tap — skip Porcupine for one cycle."""
+            """Arc reactor tap — skip the wake word for one cycle."""
             log.info("[WEB] force_listen received.")
             if self._voice_pipeline is not None:
                 self._voice_pipeline.trigger_force_listen()

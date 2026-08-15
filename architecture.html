@@ -1,0 +1,1323 @@
+<!DOCTYPE html>
+<html lang="en" data-theme="dark">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>NOIR — System Architecture</title>
+<style>
+:root{
+  --bg:#08090b; --bg-2:#0e1013; --card:#121519; --card-2:#171b21;
+  --line:#22272f; --line-2:#2e343d;
+  --text:#e6e9ee; --dim:#98a1ae; --faint:#6b7482;
+  --acc:#00e5ff; --acc-dim:#0091a7;
+  --ok:#3ddc97; --warn:#ffc857; --bad:#ff5c6c; --violet:#a78bfa;
+  --r:14px; --mono:ui-monospace,"SF Mono",SFMono-Regular,Menlo,Consolas,monospace;
+  --sans:Inter,-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,sans-serif;
+}
+:root[data-theme="light"]{
+  --bg:#f7f8fa; --bg-2:#ffffff; --card:#ffffff; --card-2:#f2f4f7;
+  --line:#e2e6ec; --line-2:#cfd6e0;
+  --text:#12161c; --dim:#5a6472; --faint:#8b95a3;
+  --acc:#0080a3; --acc-dim:#00a2c7;
+  --ok:#0f9d63; --warn:#a86b00; --bad:#c4384a; --violet:#6d4bd8;
+}
+*{box-sizing:border-box;margin:0;padding:0}
+html{scroll-behavior:smooth;scroll-padding-top:76px}
+body{background:var(--bg);color:var(--text);font-family:var(--sans);font-size:15px;line-height:1.6;-webkit-font-smoothing:antialiased}
+body::before{content:"";position:fixed;inset:0;pointer-events:none;z-index:0;
+  background:radial-gradient(900px 500px at 78% -8%,color-mix(in srgb,var(--acc) 11%,transparent),transparent 70%)}
+.wrap{position:relative;z-index:1;max-width:1180px;margin:0 auto;padding:0 22px}
+
+/* nav */
+nav{position:sticky;top:0;z-index:50;backdrop-filter:blur(14px);
+  background:color-mix(in srgb,var(--bg) 82%,transparent);border-bottom:1px solid var(--line)}
+.nav-in{max-width:1180px;margin:0 auto;padding:11px 22px;display:flex;align-items:center;gap:18px}
+.brand{font-family:var(--mono);font-weight:700;letter-spacing:.22em;font-size:13px;color:var(--acc);white-space:nowrap}
+.brand small{color:var(--faint);letter-spacing:.06em;font-weight:500;margin-left:8px}
+.links{display:flex;gap:2px;overflow-x:auto;flex:1;scrollbar-width:none}
+.links::-webkit-scrollbar{display:none}
+.links a{color:var(--dim);text-decoration:none;font-size:12.5px;padding:6px 10px;border-radius:8px;white-space:nowrap;transition:.15s}
+.links a:hover{color:var(--text);background:var(--card-2)}
+.links a.on{color:var(--acc);background:color-mix(in srgb,var(--acc) 12%,transparent)}
+.tog{border:1px solid var(--line-2);background:var(--card);color:var(--dim);border-radius:9px;
+  padding:6px 11px;font-size:12px;cursor:pointer;font-family:var(--mono);transition:.15s}
+.tog:hover{color:var(--acc);border-color:var(--acc-dim)}
+
+/* hero */
+header{padding:64px 0 44px}
+.eyebrow{font-family:var(--mono);font-size:11.5px;letter-spacing:.26em;color:var(--acc);text-transform:uppercase}
+h1{font-size:clamp(2.6rem,7vw,4.4rem);line-height:1;letter-spacing:-.04em;font-weight:800;margin:14px 0 6px}
+.sub{font-size:1.05rem;color:var(--dim);max-width:74ch;margin-top:14px}
+.tiles{display:grid;grid-template-columns:repeat(auto-fit,minmax(150px,1fr));gap:12px;margin-top:34px}
+.tile{background:var(--card);border:1px solid var(--line);border-radius:var(--r);padding:16px 18px}
+.tile b{display:block;font-size:1.85rem;font-weight:700;letter-spacing:-.03em;font-family:var(--mono);color:var(--acc)}
+.tile span{font-size:11.5px;color:var(--faint);text-transform:uppercase;letter-spacing:.13em}
+
+/* sections */
+section{padding:46px 0;border-top:1px solid var(--line)}
+h2{font-size:1.55rem;letter-spacing:-.025em;font-weight:700;display:flex;align-items:baseline;gap:12px}
+h2::before{content:attr(data-n);font-family:var(--mono);font-size:12px;color:var(--acc);letter-spacing:.1em}
+.lede{color:var(--dim);margin:8px 0 26px;max-width:80ch}
+
+/* diagram */
+.diagram{display:grid;gap:14px}
+.lane{background:var(--card);border:1px solid var(--line);border-radius:var(--r);padding:16px 18px;
+  display:grid;grid-template-columns:132px 1fr;gap:16px;align-items:center}
+.lane-t{font-family:var(--mono);font-size:11.5px;letter-spacing:.16em;text-transform:uppercase;color:var(--faint)}
+.chain{display:flex;flex-wrap:wrap;align-items:center;gap:7px}
+.node{font-family:var(--mono);font-size:12.5px;padding:6px 11px;border-radius:9px;
+  background:var(--card-2);border:1px solid var(--line-2);white-space:nowrap}
+.node.hot{border-color:var(--acc-dim);color:var(--acc);background:color-mix(in srgb,var(--acc) 10%,transparent)}
+.node.warnish{border-color:color-mix(in srgb,var(--warn) 45%,var(--line-2));color:var(--warn)}
+.arrow{color:var(--faint);font-family:var(--mono);font-size:13px}
+.bus{background:linear-gradient(180deg,var(--card-2),var(--card));border:1px dashed var(--acc-dim)}
+.legend{display:flex;flex-wrap:wrap;gap:16px;margin-top:14px;font-size:12px;color:var(--faint)}
+.legend i{display:inline-block;width:10px;height:10px;border-radius:3px;margin-right:6px;vertical-align:-1px}
+
+/* neuron graph */
+.neuro{position:relative;border:1px solid var(--line);border-radius:var(--r);overflow:hidden;
+  background:radial-gradient(120% 90% at 50% 40%,var(--card-2),var(--bg-2) 70%)}
+.neuro canvas{display:block;width:100%;height:660px;touch-action:none;cursor:grab}
+.neuro canvas:active{cursor:grabbing}
+.neuro-bar{position:absolute;top:12px;left:12px;right:12px;display:flex;flex-wrap:wrap;gap:6px;
+  align-items:center;pointer-events:none}
+.neuro-bar .chip{pointer-events:auto;background:color-mix(in srgb,var(--bg) 74%,transparent);backdrop-filter:blur(8px)}
+.neuro-hint{margin-left:auto;font-family:var(--mono);font-size:11px;color:var(--faint);
+  background:color-mix(in srgb,var(--bg) 74%,transparent);padding:5px 10px;border-radius:999px}
+.tip{position:absolute;pointer-events:none;opacity:0;transition:opacity .12s;max-width:280px;z-index:5;
+  background:color-mix(in srgb,var(--bg) 92%,transparent);border:1px solid var(--line-2);
+  border-radius:10px;padding:10px 12px;backdrop-filter:blur(10px);box-shadow:0 10px 30px rgba(0,0,0,.35)}
+.tip.on{opacity:1}
+.tip b{display:block;font-size:13px;margin-bottom:3px}
+.tip span{font-size:12px;color:var(--dim);line-height:1.45}
+.tip em{display:block;font-family:var(--mono);font-size:10.5px;letter-spacing:.1em;text-transform:uppercase;
+  color:var(--faint);font-style:normal;margin-top:7px}
+.kinds{display:flex;flex-wrap:wrap;gap:14px;margin-top:14px;font-size:12px;color:var(--faint)}
+.kinds span{display:flex;align-items:center;gap:6px}
+.kinds i{width:16px;height:2px;border-radius:2px;display:inline-block}
+details.lanes{margin-top:16px;border:1px solid var(--line);border-radius:var(--r);background:var(--card)}
+details.lanes>summary{cursor:pointer;padding:14px 18px;font-family:var(--mono);font-size:12px;
+  letter-spacing:.13em;text-transform:uppercase;color:var(--faint);list-style:none}
+details.lanes>summary::-webkit-details-marker{display:none}
+details.lanes>summary::before{content:"▸ ";color:var(--acc)}
+details.lanes[open]>summary::before{content:"▾ "}
+details.lanes .diagram{padding:0 14px 16px}
+.card.flash{border-color:var(--acc);box-shadow:0 0 0 3px color-mix(in srgb,var(--acc) 18%,transparent)}
+
+/* filter chips */
+.chips{display:flex;flex-wrap:wrap;gap:7px;margin-bottom:22px}
+.chip{font-family:var(--mono);font-size:12px;padding:6px 12px;border-radius:999px;cursor:pointer;
+  background:var(--card);border:1px solid var(--line);color:var(--dim);transition:.15s}
+.chip:hover{color:var(--text);border-color:var(--line-2)}
+.chip.on{background:color-mix(in srgb,var(--acc) 14%,transparent);border-color:var(--acc-dim);color:var(--acc)}
+
+/* cards */
+.grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(330px,1fr));gap:14px}
+.card{background:var(--card);border:1px solid var(--line);border-radius:var(--r);padding:18px 20px;transition:.18s}
+.card:hover{border-color:var(--line-2);transform:translateY(-2px)}
+.card h3{font-size:1.02rem;font-weight:650;letter-spacing:-.01em;margin-bottom:3px}
+.path{font-family:var(--mono);font-size:11.5px;color:var(--acc-dim);word-break:break-all}
+.card p{font-size:13.5px;color:var(--dim);margin-top:10px}
+.kv{margin-top:12px;display:grid;gap:6px}
+.kv div{font-size:12.5px;color:var(--dim);display:grid;grid-template-columns:96px 1fr;gap:10px}
+.kv b{font-family:var(--mono);font-size:11px;color:var(--faint);text-transform:uppercase;letter-spacing:.09em;font-weight:600}
+ul.tight{margin:10px 0 0 0;padding-left:0;list-style:none;display:grid;gap:6px}
+ul.tight li{font-size:12.5px;color:var(--dim);padding-left:15px;position:relative}
+ul.tight li::before{content:"›";position:absolute;left:0;color:var(--acc-dim);font-family:var(--mono)}
+.tag{display:inline-block;font-family:var(--mono);font-size:10.5px;letter-spacing:.09em;text-transform:uppercase;
+  padding:3px 8px;border-radius:6px;border:1px solid var(--line-2);color:var(--faint);margin-top:12px}
+
+/* tables */
+.tbl-wrap{overflow-x:auto;border:1px solid var(--line);border-radius:var(--r);background:var(--card)}
+table{width:100%;border-collapse:collapse;font-size:13px;min-width:560px}
+th{text-align:left;font-family:var(--mono);font-size:10.5px;letter-spacing:.13em;text-transform:uppercase;
+  color:var(--faint);font-weight:600;padding:12px 16px;border-bottom:1px solid var(--line)}
+td{padding:11px 16px;border-bottom:1px solid var(--line);color:var(--dim);vertical-align:top}
+tr:last-child td{border-bottom:none}
+tr:hover td{background:var(--card-2)}
+td code,.mono{font-family:var(--mono);font-size:12px;color:var(--acc)}
+td strong{color:var(--text);font-weight:600}
+
+/* severity */
+.sev{font-family:var(--mono);font-size:10.5px;letter-spacing:.1em;text-transform:uppercase;padding:3px 9px;border-radius:999px;white-space:nowrap}
+.sev.high{background:color-mix(in srgb,var(--bad) 16%,transparent);color:var(--bad);border:1px solid color-mix(in srgb,var(--bad) 40%,transparent)}
+.sev.medium{background:color-mix(in srgb,var(--warn) 15%,transparent);color:var(--warn);border:1px solid color-mix(in srgb,var(--warn) 38%,transparent)}
+.sev.low{background:color-mix(in srgb,var(--dim) 14%,transparent);color:var(--dim);border:1px solid var(--line-2)}
+.ok-dot{color:var(--ok);font-family:var(--mono)}
+
+/* two col */
+.two{display:grid;grid-template-columns:repeat(auto-fit,minmax(340px,1fr));gap:14px}
+.panel{background:var(--card);border:1px solid var(--line);border-radius:var(--r);padding:20px}
+.panel h3{font-size:.95rem;font-family:var(--mono);letter-spacing:.13em;text-transform:uppercase;color:var(--faint);margin-bottom:14px;font-weight:600}
+.panel.bad{border-color:color-mix(in srgb,var(--bad) 32%,var(--line))}
+
+footer{padding:40px 0 60px;border-top:1px solid var(--line);color:var(--faint);font-size:12.5px;display:flex;
+  flex-wrap:wrap;gap:12px;justify-content:space-between}
+@media (max-width:640px){
+  .lane{grid-template-columns:1fr;gap:10px}
+  header{padding:40px 0 30px}
+}
+@media (prefers-reduced-motion:reduce){*{transition:none!important;scroll-behavior:auto!important}}
+</style>
+</head>
+<body>
+
+<nav>
+  <div class="nav-in">
+    <div class="brand">NOIR<small>v0.4.0</small></div>
+    <div class="links" id="nav"></div>
+    <button class="tog" id="tog">◐ theme</button>
+  </div>
+</nav>
+
+<div class="wrap">
+  <header>
+    <div class="eyebrow">System Architecture</div>
+    <h1>NOIR</h1>
+    <div class="sub" id="hero-sub"></div>
+    <div class="tiles" id="tiles"></div>
+  </header>
+
+  <section id="flow">
+    <h2 data-n="01">Runtime topology</h2>
+    <p class="lede">Every node is a live unit of execution. Every edge is a real signal path, and the travelling dots are the traffic on it. Drag a node, hover to isolate its synapses, click to jump to its source.</p>
+
+    <div class="neuro">
+      <canvas id="neuro"></canvas>
+      <div class="neuro-bar" id="neuro-bar"></div>
+      <div class="tip" id="tip"></div>
+    </div>
+    <div class="kinds" id="kinds"></div>
+
+    <details class="lanes">
+      <summary>Linear pipeline view</summary>
+    <div class="diagram">
+      <div class="lane">
+        <div class="lane-t">CV loop</div>
+        <div class="chain">
+          <span class="node">camera</span><span class="arrow">→</span>
+          <span class="node hot">RobotBrain</span><span class="arrow">→</span>
+          <span class="node">mode dispatch</span><span class="arrow">→</span>
+          <span class="node">YOLOv8n · MobileNetV2 · Gemma&nbsp;VLA</span><span class="arrow">→</span>
+          <span class="node">cmd char</span>
+        </div>
+      </div>
+      <div class="lane">
+        <div class="lane-t">Voice loop</div>
+        <div class="chain">
+          <span class="node">wake / PTT</span><span class="arrow">→</span>
+          <span class="node">Whisper STT</span><span class="arrow">→</span>
+          <span class="node warnish">fast paths</span><span class="arrow">→</span>
+          <span class="node">Gemma 4 · Ollama</span><span class="arrow">→</span>
+          <span class="node hot">Pydantic gate</span><span class="arrow">→</span>
+          <span class="node">CommandQueue</span><span class="arrow">+</span>
+          <span class="node">Piper TTS</span>
+        </div>
+      </div>
+      <div class="lane">
+        <div class="lane-t">Web bridge</div>
+        <div class="chain">
+          <span class="node">Flutter app</span><span class="arrow">↔</span>
+          <span class="node">SocketIO :5000</span><span class="arrow">↔</span>
+          <span class="node">WebServer</span><span class="arrow">→</span>
+          <span class="node">state_update 100ms · MJPEG 15fps</span>
+        </div>
+      </div>
+      <div class="lane bus">
+        <div class="lane-t">Shared</div>
+        <div class="chain">
+          <span class="node hot">RobotState · RLock + deepcopy</span>
+          <span class="arrow">—</span>
+          <span class="node hot">RobotComms allow-list</span>
+          <span class="arrow">→</span>
+          <span class="node">TCP :9999</span>
+          <span class="arrow">→</span>
+          <span class="node">ESP32 · L298N</span>
+        </div>
+      </div>
+      <div class="lane">
+        <div class="lane-t">Supervision</div>
+        <div class="chain">
+          <span class="node">ThreadSupervisor</span><span class="arrow">↻</span>
+          <span class="node">cmd-queue</span>
+          <span class="node">voice-pipeline</span>
+          <span class="node">state-pusher</span>
+          <span class="arrow">·</span>
+          <span class="node">10 restarts / 60s → degraded</span>
+        </div>
+      </div>
+    </div>
+      <div class="legend">
+        <span><i style="background:var(--acc)"></i>trust boundary or shared state</span>
+        <span><i style="background:var(--warn)"></i>short-circuit before the model</span>
+        <span><i style="background:var(--line-2)"></i>plain stage</span>
+      </div>
+    </details>
+  </section>
+
+  <section id="components">
+    <h2 data-n="02">Components</h2>
+    <p class="lede">Every entry below was read out of the source, not the docs. Filter by layer.</p>
+    <div class="chips" id="chips"></div>
+    <div class="grid" id="cards"></div>
+  </section>
+
+  <section id="threads">
+    <h2 data-n="03">Threads &amp; modes</h2>
+    <p class="lede">Nothing that can block runs on the CV loop. Model loads, inference, playback and reconnects all live on their own threads.</p>
+    <div class="tbl-wrap" id="t-threads"></div>
+    <div style="height:14px"></div>
+    <div class="tbl-wrap" id="t-modes"></div>
+  </section>
+
+  <section id="protocols">
+    <h2 data-n="04">Protocols</h2>
+    <p class="lede">One byte to the hardware, JSON events to the phone, bearer-authenticated HTTP for everything else.</p>
+    <div class="two">
+      <div class="panel">
+        <h3>TCP :9999 command set</h3>
+        <div id="p-tcp"></div>
+      </div>
+      <div class="panel">
+        <h3>Action schema (validated)</h3>
+        <div id="p-actions"></div>
+      </div>
+    </div>
+    <div style="height:14px"></div>
+    <div class="tbl-wrap" id="t-sio"></div>
+    <div style="height:14px"></div>
+    <div class="tbl-wrap" id="t-http"></div>
+  </section>
+
+  <section id="dataflow">
+    <h2 data-n="05">Data flows</h2>
+    <p class="lede">Every edge in the system, with its transport and its rate.</p>
+    <div class="tbl-wrap" id="t-flows"></div>
+  </section>
+
+  <section id="security">
+    <h2 data-n="06">Security</h2>
+    <p class="lede">Controls that hold, and findings that do not. Both are listed; the second list is the honest one.</p>
+    <div class="two">
+      <div class="panel"><h3>Enforced controls</h3><div id="p-ctrl"></div></div>
+      <div class="panel bad"><h3>Open findings</h3><div id="p-find"></div></div>
+    </div>
+  </section>
+
+  <section id="resilience">
+    <h2 data-n="07">Failure modes</h2>
+    <p class="lede">What breaks, what catches it, and how far the damage spreads.</p>
+    <div class="tbl-wrap" id="t-fail"></div>
+  </section>
+
+  <section id="config">
+    <h2 data-n="08">Configuration</h2>
+    <p class="lede">Typed environment config validated at startup. A missing secret kills the process rather than running open.</p>
+    <div class="two" id="p-config"></div>
+  </section>
+
+  <section id="ops">
+    <h2 data-n="09">Testing, deployment &amp; gaps</h2>
+    <p class="lede">Where the coverage sits, how it runs, and what is declared but not built.</p>
+    <div class="two">
+      <div class="panel"><h3>Test suites</h3><div id="p-tests"></div></div>
+      <div class="panel"><h3>Deployment</h3><div id="p-deploy"></div></div>
+    </div>
+    <div style="height:14px"></div>
+    <div class="panel"><h3>Known gaps</h3><ul class="tight" id="p-gaps"></ul></div>
+  </section>
+
+  <footer>
+    <span>Generated from source · <span class="mono">architecture.json</span> is the machine-readable twin of this page.</span>
+    <span class="mono" id="foot-date"></span>
+  </footer>
+</div>
+
+<script type="application/json" id="arch">{
+  "$schema": "https://noir.local/schema/architecture-1.json",
+  "meta": {
+    "name": "NOIR",
+    "codename": "JARVIS",
+    "version": "0.4.0",
+    "kind": "autonomous mobile robot assistant",
+    "generated": "2026-07-22",
+    "source_of_truth": "derived by reading the repository source, not documentation",
+    "repo_root": "/home/ladliju/Developer/Noir",
+    "summary": "Three concurrent pipelines (vision, voice, web bridge) share one thread-safe RobotState on a laptop. All reasoning happens on the laptop; an ESP32 is a dumb actuator that executes single-character motor commands received over TCP. A Flutter app is a remote telemetry and control surface."
+  },
+
+  "layers": [
+    {
+      "id": "perception",
+      "name": "Perception & Vision",
+      "runtime": "Python 3.12 / laptop (CUDA optional)",
+      "purpose": "Turn camera frames into a single-character motor intent."
+    },
+    {
+      "id": "cognition",
+      "name": "Cognition & Voice",
+      "runtime": "Python 3.12 / laptop, one daemon thread",
+      "purpose": "Wake word to speech to intent to validated action tokens."
+    },
+    {
+      "id": "coordination",
+      "name": "Coordination & State",
+      "runtime": "Python 3.12 / laptop, shared memory",
+      "purpose": "Own the mode, serialise actions, supervise threads, survive failure."
+    },
+    {
+      "id": "transport",
+      "name": "Transport & Bridges",
+      "runtime": "Python 3.12 / laptop, TCP :9999 and HTTP/WS :5000",
+      "purpose": "Reach the hardware and the phone. Every boundary is authenticated or allow-listed."
+    },
+    {
+      "id": "clients",
+      "name": "Clients",
+      "runtime": "Flutter (Android/iOS) + embedded browser dashboard",
+      "purpose": "Telemetry, manual drive, camera view, push-to-talk."
+    },
+    {
+      "id": "hardware",
+      "name": "Hardware",
+      "runtime": "ESP32 / ESP-IDF v6 / FreeRTOS",
+      "purpose": "Execute motor commands. No decisions on the board."
+    }
+  ],
+
+  "graph": {
+    "description": "Neuron view of the running system. Nodes are live units of execution or external endpoints; edges are real signal paths carrying frames, command bytes, state snapshots, audio or model traffic.",
+    "layer_colors": {
+      "perception": "#3ddc97",
+      "cognition": "#a78bfa",
+      "coordination": "#00e5ff",
+      "transport": "#ffc857",
+      "clients": "#7dd3fc",
+      "hardware": "#ff5c6c",
+      "external": "#8b95a3"
+    },
+    "edge_kinds": {
+      "frame": "camera frames and encoded video",
+      "command": "single-character motor commands",
+      "state": "RobotState reads and writes",
+      "audio": "PCM16 in, WAV out",
+      "model": "LLM / VLM inference traffic",
+      "network": "control and telemetry messages",
+      "supervise": "thread lifecycle control"
+    },
+    "nodes": [
+      {"id": "camera", "label": "Camera", "layer": "external", "size": 1, "note": "V4L2 device: laptop cam or phone via scrcpy"},
+      {"id": "mic", "label": "Microphone", "layer": "external", "size": 1, "note": "laptop mic, or phone mic streamed over SocketIO"},
+      {"id": "ollama", "label": "Ollama", "layer": "external", "size": 2, "note": "gemma4-e2b-nothink, local HTTP :11434"},
+      {"id": "speaker", "label": "Laptop speaker", "layer": "external", "size": 1, "note": "aplay stdin"},
+
+      {"id": "robot_brain", "label": "RobotBrain", "layer": "coordination", "size": 3, "note": "CV loop, 20 fps cap, mode dispatch"},
+      {"id": "robot_state", "label": "RobotState", "layer": "coordination", "size": 3, "note": "RLock + deepcopy, the only shared memory"},
+      {"id": "command_queue", "label": "CommandQueue", "layer": "coordination", "size": 2, "note": "bounded FIFO, drop-oldest, one executor thread"},
+      {"id": "supervisor", "label": "ThreadSupervisor", "layer": "coordination", "size": 2, "note": "restarts dead threads, 10 per 60 s then degraded"},
+      {"id": "config", "label": "Config", "layer": "coordination", "size": 1, "note": "typed env, validated at startup"},
+      {"id": "health", "label": "Health checks", "layer": "coordination", "size": 1, "note": "Ollama, Piper, camera probes"},
+
+      {"id": "human_detector", "label": "YOLOv8n", "layer": "perception", "size": 2, "note": "person detection, class 0 only"},
+      {"id": "line_follower", "label": "MobileNetV2", "layer": "perception", "size": 2, "note": "6-class line steer classifier"},
+      {"id": "vla", "label": "Gemma VLA", "layer": "perception", "size": 2, "note": "change-triggered vision-language-action"},
+      {"id": "geometry", "label": "Geometry", "layer": "perception", "size": 1, "note": "focal, angle, safe-distance policy"},
+
+      {"id": "voice_pipeline", "label": "VoicePipeline", "layer": "cognition", "size": 3, "note": "one daemon thread owning the whole conversation cycle"},
+      {"id": "wake_word", "label": "openWakeWord", "layer": "cognition", "size": 1, "note": "1280-sample frames, peak or smoothed trigger"},
+      {"id": "stt", "label": "Whisper STT", "layer": "cognition", "size": 2, "note": "faster-whisper, CUDA int8, energy VAD"},
+      {"id": "llm_parser", "label": "LLMParser", "layer": "cognition", "size": 2, "note": "prompt, retry with backoff, Pydantic gate"},
+      {"id": "tts", "label": "Piper TTS", "layer": "cognition", "size": 2, "note": "offline ONNX voice, routed to phone or laptop"},
+
+      {"id": "web_server", "label": "WebServer", "layer": "transport", "size": 3, "note": "Flask-SocketIO :5000, bearer auth, rate limited"},
+      {"id": "rest_api", "label": "REST blueprint", "layer": "transport", "size": 1, "note": "/api/robot/*"},
+      {"id": "robot_comms", "label": "RobotComms", "layer": "transport", "size": 3, "note": "TCP server :9999, command allow-list"},
+
+      {"id": "flutter_app", "label": "Flutter app", "layer": "clients", "size": 2, "note": "telemetry, manual drive, MJPEG, push-to-talk"},
+      {"id": "browser_dashboard", "label": "Browser dashboard", "layer": "clients", "size": 1, "note": "zero-dependency fallback UI at /"},
+
+      {"id": "esp32", "label": "ESP32", "layer": "hardware", "size": 2, "note": "ESP-IDF, recv one byte, drive pins, stop on anything odd"},
+      {"id": "motors", "label": "L298N motors", "layer": "hardware", "size": 1, "note": "LEDC PWM 1 kHz 8-bit"}
+    ],
+    "edges": [
+      {"from": "camera", "to": "robot_brain", "kind": "frame", "label": "BGR frame, 20 fps cap"},
+      {"from": "robot_brain", "to": "human_detector", "kind": "frame", "label": "mode HUMAN_TRACK"},
+      {"from": "robot_brain", "to": "line_follower", "kind": "frame", "label": "mode LFR"},
+      {"from": "robot_brain", "to": "vla", "kind": "frame", "label": "mode VLA, only on MSE > 15"},
+      {"from": "human_detector", "to": "geometry", "kind": "frame", "label": "smoothed bbox"},
+      {"from": "geometry", "to": "robot_brain", "kind": "command", "label": "safe-distance command"},
+      {"from": "line_follower", "to": "robot_brain", "kind": "command", "label": "steer to F/L/R/S"},
+      {"from": "vla", "to": "ollama", "kind": "model", "label": "JPEG 640px q65 + state"},
+      {"from": "ollama", "to": "vla", "kind": "model", "label": "{speech, actions}"},
+      {"from": "vla", "to": "robot_brain", "kind": "command", "label": "first move action"},
+      {"from": "vla", "to": "tts", "kind": "audio", "label": "spoken observation"},
+
+      {"from": "robot_brain", "to": "robot_comms", "kind": "command", "label": "one char per iteration"},
+      {"from": "robot_comms", "to": "esp32", "kind": "command", "label": "TCP :9999, 1 ASCII byte"},
+      {"from": "esp32", "to": "motors", "kind": "command", "label": "GPIO + PWM duty"},
+      {"from": "robot_brain", "to": "robot_state", "kind": "state", "label": "mode, last_cmd, yolo_info"},
+      {"from": "robot_brain", "to": "web_server", "kind": "frame", "label": "display frame, encoded only if a client is attached"},
+
+      {"from": "mic", "to": "wake_word", "kind": "audio", "label": "16 kHz PCM16"},
+      {"from": "mic", "to": "stt", "kind": "audio", "label": "16 kHz PCM16"},
+      {"from": "wake_word", "to": "voice_pipeline", "kind": "audio", "label": "wake detected"},
+      {"from": "voice_pipeline", "to": "stt", "kind": "audio", "label": "listen window"},
+      {"from": "stt", "to": "voice_pipeline", "kind": "network", "label": "transcript"},
+      {"from": "robot_state", "to": "voice_pipeline", "kind": "state", "label": "snapshot for vision context"},
+      {"from": "voice_pipeline", "to": "llm_parser", "kind": "model", "label": "text + state snapshot"},
+      {"from": "llm_parser", "to": "ollama", "kind": "model", "label": "format=json, temp 0.1"},
+      {"from": "ollama", "to": "llm_parser", "kind": "model", "label": "raw JSON"},
+      {"from": "llm_parser", "to": "voice_pipeline", "kind": "network", "label": "validated {speech, actions}"},
+      {"from": "voice_pipeline", "to": "tts", "kind": "audio", "label": "reply text"},
+      {"from": "voice_pipeline", "to": "command_queue", "kind": "command", "label": "action tokens + corr id"},
+      {"from": "voice_pipeline", "to": "robot_state", "kind": "state", "label": "last_heard, jarvis_response"},
+      {"from": "command_queue", "to": "robot_comms", "kind": "command", "label": "timed move sequences"},
+      {"from": "command_queue", "to": "robot_state", "kind": "state", "label": "mode, goto_target"},
+      {"from": "tts", "to": "speaker", "kind": "audio", "label": "WAV to aplay"},
+      {"from": "tts", "to": "web_server", "kind": "audio", "label": "WAV callback when phone owns audio"},
+
+      {"from": "web_server", "to": "flutter_app", "kind": "network", "label": "state_update every 100 ms"},
+      {"from": "web_server", "to": "flutter_app", "kind": "audio", "label": "tts_audio WAV"},
+      {"from": "web_server", "to": "flutter_app", "kind": "frame", "label": "MJPEG /frame ~15 fps"},
+      {"from": "flutter_app", "to": "web_server", "kind": "audio", "label": "mic PCM16, 400-deep drop-oldest queue"},
+      {"from": "flutter_app", "to": "web_server", "kind": "network", "label": "IMU, GPS, mode, move, force_listen"},
+      {"from": "browser_dashboard", "to": "web_server", "kind": "network", "label": "bearer REST poll"},
+      {"from": "web_server", "to": "voice_pipeline", "kind": "audio", "label": "audio queue handle"},
+      {"from": "web_server", "to": "robot_state", "kind": "state", "label": "imu, gps, phone_connected"},
+      {"from": "robot_state", "to": "web_server", "kind": "state", "label": "snapshot broadcast"},
+      {"from": "web_server", "to": "robot_comms", "kind": "command", "label": "manual move + auto-stop timer"},
+      {"from": "web_server", "to": "rest_api", "kind": "network", "label": "blueprint registration"},
+      {"from": "rest_api", "to": "command_queue", "kind": "command", "label": "queued action"},
+      {"from": "rest_api", "to": "robot_state", "kind": "state", "label": "snapshot read"},
+
+      {"from": "supervisor", "to": "voice_pipeline", "kind": "supervise", "label": "restart on death"},
+      {"from": "supervisor", "to": "command_queue", "kind": "supervise", "label": "restart on death"},
+      {"from": "supervisor", "to": "web_server", "kind": "supervise", "label": "restart state-pusher"},
+      {"from": "config", "to": "robot_brain", "kind": "supervise", "label": "validated env or hard exit"},
+      {"from": "health", "to": "robot_brain", "kind": "supervise", "label": "probe results, degrade not abort"}
+    ]
+  },
+
+  "components": [
+    {
+      "id": "robot_brain",
+      "name": "RobotBrain",
+      "layer": "coordination",
+      "file": "backend/main.py",
+      "loc": 771,
+      "responsibility": "Owns the CV loop at a 20 fps cap (LOOP_SLEEP_S = 0.05). Reads a frame, dispatches on RobotMode via match/case, emits one command char, sends it to the ESP32, pushes the frame to the web bridge, draws the HUD, handles hotkeys.",
+      "key_symbols": ["RobotBrain.run", "RobotBrain._send", "RobotMode", "_run_lfr", "_run_human", "_run_vla", "_draw_hud"],
+      "concurrency": "main thread",
+      "degradation": [
+        "Camera missing -> CameraUnavailable caught, mode forced to IDLE, voice and manual still work",
+        "Web server start failure -> use_web disabled, loop continues",
+        "Voice pipeline start failure -> logged, loop continues",
+        "10 consecutive frame or loop errors -> clean shutdown with emergency S"
+      ],
+      "notes": "Frame pooling (deque maxlen=3) reuses same-shape numpy buffers instead of reallocating each iteration."
+    },
+    {
+      "id": "robot_state",
+      "name": "RobotState",
+      "layer": "coordination",
+      "file": "backend/services/robot_state.py",
+      "loc": 184,
+      "responsibility": "The single shared mutable object. Every field is a property guarded by one threading.RLock. Dict fields (imu, gps) return copy.deepcopy so no caller ever holds a mutable reference into shared state.",
+      "fields": ["mode", "last_cmd", "goto_target", "yolo_info", "phone_connected", "imu", "gps", "last_heard", "jarvis_response", "camera_device", "ptt_active"],
+      "key_symbols": ["RobotState.snapshot"],
+      "concurrency": "touched by CV loop, voice pipeline, command queue, web bridge, state pusher"
+    },
+    {
+      "id": "command_queue",
+      "name": "CommandQueue",
+      "layer": "coordination",
+      "file": "backend/services/command_queue.py",
+      "loc": 184,
+      "responsibility": "FIFO of validated action tokens drained by one executor thread. Serialises timed moves so two LLM actions never fight for the motors.",
+      "action_types": ["mode", "move", "goto", "arm"],
+      "backpressure": "Bounded at CMD_QUEUE_MAX (128). On overflow it evicts the oldest action, logs a warning, then retries the put. Never blocks a producer.",
+      "notes": "A timed move flips mode to MANUAL for its duration to freeze the CV loop, then restores the previous mode.",
+      "concurrency": "daemon thread 'cmd-queue', restartable via executor_thread_factory"
+    },
+    {
+      "id": "supervisor",
+      "name": "ThreadSupervisor",
+      "layer": "coordination",
+      "file": "backend/services/supervisor.py",
+      "loc": 85,
+      "responsibility": "Polls registered threads every 1 s and restarts any that died. Each registrant supplies a factory returning a fresh Thread.",
+      "policy": "MAX_RESTARTS 10 within a 60 s window, then the thread is marked degraded and left dead rather than crash-looping.",
+      "supervises": ["cmd-queue", "voice-pipeline", "state-pusher"]
+    },
+    {
+      "id": "health",
+      "name": "Startup health checks",
+      "layer": "coordination",
+      "file": "backend/services/health.py",
+      "loc": 75,
+      "responsibility": "Non-raising probes run before the loop starts: Ollama /api/tags reachable, Piper binary present and executable, camera openable. Returns a dict; the caller decides abort vs degrade."
+    },
+    {
+      "id": "config",
+      "name": "Typed config",
+      "layer": "coordination",
+      "file": "backend/config/config.py",
+      "loc": 232,
+      "responsibility": "Single source of truth for every tunable, read from environment via typed helpers. validate_config() raises ConfigError at startup so the process dies early instead of failing deep inside a service. summary() emits a redacted snapshot for diagnostics."
+    },
+
+    {
+      "id": "human_detector",
+      "name": "HumanDetector (YOLOv8n)",
+      "layer": "perception",
+      "file": "tracker.py",
+      "responsibility": "Person detection, COCO class 0 only, conf 0.45 / IoU 0.45. Degrades to disabled if ultralytics is not importable.",
+      "downstream": "EMATracker smooths the bbox (alpha 0.25), then RobotComms.from_human_bbox converts geometry to a command."
+    },
+    {
+      "id": "line_follower",
+      "name": "HybridLineFollower (MobileNetV2)",
+      "layer": "perception",
+      "file": "tracker.py",
+      "responsibility": "Fine-tuned MobileNetV2 classifier over 6 classes (Move Left, Move Right, No Line, Straight, Turn Left, Turn Right) mapped to a steer string. Weights load from a local path, else fall back to a HuggingFace download; if both fail it reports LOST rather than steering blind.",
+      "notes": "The classic OpenCV scanline follower is present but commented out; the live path is ML-only despite the 'Hybrid' name."
+    },
+    {
+      "id": "vla",
+      "name": "GemmaVLAProcessor",
+      "layer": "perception",
+      "file": "vision_processor.py",
+      "loc": 201,
+      "responsibility": "Vision-language-action. Sends a JPEG frame plus state context to Ollama and gets back {speech, actions} validated by the same Pydantic LLMResponse model as the text parser.",
+      "cost_control": [
+        "Only fires when has_significant_change() sees MSE > 15 on 64x64 grayscale downsamples",
+        "Frame capped at 640 px long edge, JPEG quality 65",
+        "keep_alive 30m pins the model in GPU; a warm-up POST runs at construction to avoid the 20-40 s cold load"
+      ],
+      "concurrency": "inference runs on a throwaway daemon thread guarded by a busy flag, so the CV loop never blocks on the model"
+    },
+    {
+      "id": "geometry",
+      "name": "Camera geometry helpers",
+      "layer": "perception",
+      "file": "tracker.py",
+      "responsibility": "compute_focal (cached), pixel_offset_to_angle, estimate_distance from known object height. HFOV 69 degrees.",
+      "distance_policy": "bbox area > 40% of frame -> S (too close), |rotate| > 5 deg -> L/R, area < 15% -> F, else S"
+    },
+
+    {
+      "id": "voice_pipeline",
+      "name": "VoicePipeline",
+      "layer": "cognition",
+      "file": "backend/services/voice_pipeline.py",
+      "loc": 309,
+      "responsibility": "One daemon thread running the whole conversation cycle so the CV loop is never blocked. Wake, transcribe, short-circuit, reason, speak, enqueue.",
+      "cycle": [
+        "0. Mint a 12-char correlation id and bind it to the log context",
+        "1. Wake word on phone audio queue, or a force_listen event from the app tap / spacebar PTT",
+        "2. Transcribe from phone queue if connected, else laptop mic",
+        "3. Regex CUSTOM_RESPONSES fast path - answered locally, no model call",
+        "4. Emergency keyword fast path - clears the queue, forces IDLE, never reaches the LLM",
+        "5. Snapshot RobotState so the model gets vision context",
+        "6. LLMParser -> validated {speech, actions}",
+        "7. TTS speaks non-blocking, actions go to CommandQueue"
+      ],
+      "warmup": "Whisper and Piper load in parallel daemon threads at construction, saving 2-8 s on the first request."
+    },
+    {
+      "id": "wake_word",
+      "name": "WakeWordDetector",
+      "layer": "cognition",
+      "file": "backend/services/wake_word.py",
+      "loc": 179,
+      "engine": "openWakeWord (Apache-2.0, no vendor key)",
+      "responsibility": "16 kHz PCM16 in 1280-sample frames. Triggers on instant peak or a 3-frame smoothed average at 80% of threshold. Works on the laptop mic or on variable-size chunks buffered from the phone queue.",
+      "discrepancy": "README, CLAUDE.md and pyproject still name Porcupine / pvporcupine. The live code is openWakeWord. pvporcupine is a stale dependency."
+    },
+    {
+      "id": "stt",
+      "name": "WhisperSTT",
+      "layer": "cognition",
+      "file": "backend/services/stt.py",
+      "loc": 316,
+      "engine": "faster-whisper, CUDA with int8, automatic CPU fallback",
+      "responsibility": "Energy-gated VAD recording then transcription. Waits up to no_speech_timeout for speech to start, then records until silence_timeout of continuous quiet, hard-capped at max_duration.",
+      "details": [
+        "5-chunk pre-roll buffer so the start of the sentence is not clipped",
+        "Phone threshold is auto-lowered to 40% of the laptop threshold (floor 150) for a different noise floor",
+        "Stale queued audio is drained before listening so a tap-to-talk starts clean",
+        "Silero VAD also runs inside Whisper on the recorded buffer"
+      ]
+    },
+    {
+      "id": "llm_parser",
+      "name": "LLMParser",
+      "layer": "cognition",
+      "file": "backend/services/llm_parser.py",
+      "loc": 243,
+      "model": "gemma4-e2b-nothink:latest via Ollama /api/generate",
+      "responsibility": "Prompt with live state, force JSON output, then validate hard. Nothing unvalidated reaches the queue.",
+      "resilience": "Exponential backoff with jitter on Timeout / ConnectionError / 5xx. Any failure returns a safe {speech, actions: []} fallback so the robot says something and moves nothing.",
+      "parsing": "Strips markdown fences, extracts the outermost JSON object, validates against LLMResponse. On validation failure it salvages only the speech field and drops all actions."
+    },
+    {
+      "id": "tts",
+      "name": "PiperTTS",
+      "layer": "cognition",
+      "file": "backend/services/tts.py",
+      "loc": 217,
+      "engine": "piper-tts, offline ONNX neural voice",
+      "responsibility": "Render WAV in memory, then route it. Phone camera in use and phone connected -> emit over SocketIO to the phone speaker; otherwise pipe to aplay on the laptop, with automatic fallback if the phone path throws.",
+      "concurrency": "non-blocking by default via a daemon thread; a non-blocking lock drops overlapping utterances instead of queueing them. Live subprocesses are tracked in a WeakSet and terminated at shutdown."
+    },
+
+    {
+      "id": "web_server",
+      "name": "WebServer (Flask-SocketIO)",
+      "layer": "transport",
+      "file": "web_server.py",
+      "loc": 606,
+      "bind": "0.0.0.0:5000",
+      "responsibility": "The phone bridge. Authenticated SocketIO handshake, phone mic audio in, sensors in, TTS audio out, state broadcast out, MJPEG stream, REST commands, embedded browser dashboard.",
+      "concurrency": "daemon thread 'web-server' plus a supervised 'state-pusher' thread",
+      "hardening": [
+        "Bearer token on every REST route, compared with hmac.compare_digest",
+        "Missing JARVIS_SECRET_KEY returns 503 and refuses to start the server; it never silently runs open",
+        "SocketIO connect handler returns False on a bad or missing token",
+        "flask-limiter: 5 req/s on /command, 10000/hour default",
+        "CORS reflected only for origins in the ALLOWED_ORIGINS list",
+        "Payload caps: 1 MB body on /command, 512 KB audio frame, 8 KB sensor JSON",
+        "Move duration clamped to [0.1, MOVE_MAX_DURATION_S]; a single shared timer is cancelled and replaced so repeated moves cannot leak threads"
+      ],
+      "efficiency": "Frames are only JPEG-encoded when a browser or app client is actually attached."
+    },
+    {
+      "id": "rest_api",
+      "name": "REST blueprint",
+      "layer": "transport",
+      "file": "backend/api/robot.py",
+      "loc": 78,
+      "responsibility": "Secondary /api/robot/* surface registered onto the Flask app after the server thread comes up (polled up to 5 s). Same Bearer auth, Pydantic-validated body.",
+      "endpoints": ["POST /api/robot/command", "GET /api/robot/state", "POST /api/llm/query (501 not implemented)"]
+    },
+    {
+      "id": "robot_comms",
+      "name": "RobotComms",
+      "layer": "transport",
+      "file": "backend/esp32/robot_comms.py",
+      "loc": 324,
+      "topology": "The laptop is the TCP server on :9999; the ESP32 dials in as a client.",
+      "responsibility": "Single-byte command transport plus the geometry-to-command translation helpers.",
+      "hardening": [
+        "Allow-list at the socket boundary: FBLRS motor plus GOUD arm. Anything else is dropped and logged.",
+        "Always uppercased and truncated to one character before send",
+        "Duplicate commands are suppressed; the board holds its last state"
+      ],
+      "resilience": [
+        "TCP_NODELAY and 50 ms send timeout so the CV loop never stalls on a dead link",
+        "select() before every write; a broken pipe clears the client and schedules reconnect",
+        "Exponential backoff with jitter from ESP32_RECONNECT_BASE_S 1 s to ESP32_RECONNECT_MAX_S 30 s",
+        "Initial connect runs on a background thread so the loop starts with no hardware present"
+      ]
+    },
+
+    {
+      "id": "flutter_app",
+      "name": "Flutter app (jarvis_app)",
+      "layer": "clients",
+      "file": "jarvis_app/lib/",
+      "responsibility": "Four screens (home, control, vision, settings) over a Provider-held SocketService. Streams mic PCM16 up, plays TTS WAV down, publishes IMU and GPS, sends mode and move commands, renders the MJPEG feed.",
+      "packages": ["socket_io_client", "record", "just_audio", "sensors_plus", "geolocator", "shared_preferences", "provider", "flutter_animate", "dynamic_color"],
+      "auth": "Host and token persist in SharedPreferences and are sent both as SocketIO auth payload and query fallback."
+    },
+    {
+      "id": "browser_dashboard",
+      "name": "Embedded browser dashboard",
+      "layer": "clients",
+      "file": "web_server.py (_HTML)",
+      "responsibility": "Zero-dependency fallback UI served at /. Polls /status every second, posts move and mode commands. Reads its bearer token from localStorage."
+    },
+
+    {
+      "id": "esp32",
+      "name": "ESP32 motor controller",
+      "layer": "hardware",
+      "file": "backend/esp32/main/main.c",
+      "loc": 233,
+      "platform": "ESP-IDF v6, FreeRTOS, L298N H-bridge",
+      "responsibility": "Join Wi-Fi, dial the brain on TCP :9999, recv() one byte at a time, drive the pins. It makes no decisions.",
+      "pins": {"ENA": "GPIO25", "IN1": "GPIO26", "IN2": "GPIO27", "ENB": "GPIO13", "IN3": "GPIO14", "IN4": "GPIO12"},
+      "pwm": "LEDC low-speed mode, 1 kHz, 8-bit. SPEED_NORMAL 200, SPEED_TURN 180.",
+      "failsafe": [
+        "Unknown character -> motor_stop()",
+        "Socket disconnect (recv <= 0) -> motor_stop() then reconnect after 500 ms",
+        "Connect failure -> motor_stop() then retry after 1 s",
+        "Wi-Fi disconnect event -> automatic esp_wifi_connect()"
+      ]
+    }
+  ],
+
+  "runtime_threads": [
+    {"name": "main", "owner": "robot_brain", "kind": "main", "role": "CV loop, 20 fps cap, cv2 window and hotkeys"},
+    {"name": "web-server", "owner": "web_server", "kind": "daemon", "role": "Flask-SocketIO serve loop"},
+    {"name": "state-pusher", "owner": "web_server", "kind": "supervised", "role": "emit state_update to the phone on a 100 ms tick while connected"},
+    {"name": "voice-pipeline", "owner": "voice_pipeline", "kind": "supervised", "role": "wake -> STT -> LLM -> TTS -> enqueue"},
+    {"name": "cmd-queue", "owner": "command_queue", "kind": "supervised", "role": "serialise and execute action tokens"},
+    {"name": "supervisor", "owner": "supervisor", "kind": "daemon", "role": "restart dead supervised threads"},
+    {"name": "esp32-initial-connect", "owner": "robot_comms", "kind": "daemon", "role": "first accept() poll so startup is not blocked on hardware"},
+    {"name": "esp32-reconnect", "owner": "robot_comms", "kind": "daemon", "role": "backoff reconnect loop"},
+    {"name": "vla-warmup / vla inference", "owner": "vla", "kind": "daemon", "role": "pin the model, then run each inference off-loop"},
+    {"name": "stt-warmup / tts-warmup", "owner": "voice_pipeline", "kind": "daemon", "role": "parallel model preload at construction"},
+    {"name": "tts speak", "owner": "tts", "kind": "daemon", "role": "synthesis and playback per utterance"},
+    {"name": "move stop timer", "owner": "web_server", "kind": "daemon timer", "role": "auto-stop a timed manual move; cancelled and replaced, never accumulated"}
+  ],
+
+  "modes": [
+    {"id": "IDLE", "command": "S", "description": "Default and safe state. Also the forced state when the camera is unavailable or an emergency keyword is heard.", "hotkey": "0"},
+    {"id": "LFR", "command": "from HybridLineFollower steer", "description": "Line following via the MobileNetV2 classifier.", "hotkey": "1"},
+    {"id": "HUMAN_TRACK", "command": "from bbox geometry", "description": "YOLOv8n person tracking with EMA smoothing and safe-distance logic. Rotates right to search when nobody is visible.", "hotkey": "2"},
+    {"id": "VLA", "command": "first move action from the last VLA response", "description": "Change-triggered vision-language navigation via Gemma 4.", "hotkey": "3"},
+    {"id": "MANUAL", "command": "state.last_cmd passthrough", "description": "CV loop stops deciding; the app, the dashboard or a timed queue move owns the motors.", "hotkey": "4"},
+    {"id": "GOTO", "command": "n/a", "description": "Accepted as an action type and settable via the web bridge, but the CV loop has no GOTO branch. Falls through to the unknown-mode guard and stops.", "status": "declared, not implemented"}
+  ],
+
+  "protocols": {
+    "esp32_tcp": {
+      "transport": "TCP, laptop listens on :9999, ESP32 connects out",
+      "payload": "one ASCII byte per command, no framing, no ack",
+      "commands": {
+        "F": "forward, both motors SPEED_NORMAL",
+        "B": "backward, both motors SPEED_NORMAL",
+        "L": "left, differential at SPEED_TURN",
+        "R": "right, differential at SPEED_TURN",
+        "S": "stop, duty 0 and all direction pins low"
+      },
+      "arm_commands_sent_but_not_implemented_on_board": {"G": "grab", "O": "release", "U": "up", "D": "down"}
+    },
+    "socketio": {
+      "url": "ws://<laptop>:5000",
+      "auth": "token in the handshake auth dict, query param fallback; rejected connections return False",
+      "phone_to_laptop": [
+        {"event": "audio_data", "payload": "binary PCM16 LE 16 kHz mono", "limit": "512 KB per frame, queue 400 deep with drop-oldest"},
+        {"event": "sensor_data", "payload": "{imu:{accel,gyro}, gps:{lat,lon,alt,speed}}", "limit": "8 KB serialised"},
+        {"event": "force_listen", "payload": "empty", "effect": "skip the wake word for one cycle"},
+        {"event": "command", "payload": "{type: mode|move, ...}", "effect": "same handler as REST /command, replies with command_ack"}
+      ],
+      "laptop_to_phone": [
+        {"event": "state_update", "payload": "full RobotState snapshot", "cadence": "100 ms tick while the phone is connected"},
+        {"event": "tts_audio", "payload": "raw WAV bytes for the phone speaker"},
+        {"event": "audio_error / sensor_error / command_ack", "payload": "{reason} or {status}"}
+      ]
+    },
+    "http": [
+      {"method": "GET", "path": "/", "auth": "none", "returns": "embedded dashboard HTML"},
+      {"method": "GET", "path": "/status", "auth": "bearer", "returns": "RobotState snapshot", "rate_limit": "exempt"},
+      {"method": "POST", "path": "/command", "auth": "bearer", "rate_limit": "5/s", "body": "{type: mode|move, ...}"},
+      {"method": "GET", "path": "/frame", "auth": "bearer", "returns": "multipart MJPEG at ~15 fps"},
+      {"method": "POST", "path": "/api/robot/command", "auth": "bearer", "returns": "{status: queued}"},
+      {"method": "GET", "path": "/api/robot/state", "auth": "bearer"},
+      {"method": "POST", "path": "/api/llm/query", "auth": "bearer", "returns": "501"}
+    ]
+  },
+
+  "action_schema": {
+    "validator": "pydantic, discriminated union on 'type', model LLMResponse{speech, actions[]}",
+    "enforcement": "Every model output, text or vision, is validated before it can touch the queue. A validation failure drops all actions and keeps only the speech.",
+    "actions": [
+      {"type": "mode", "fields": {"value": "LFR | HUMAN_TRACK | VLA | GOTO | MANUAL | IDLE"}},
+      {"type": "move", "fields": {"cmd": "F | B | L | R | S", "duration": "float, schema [0.1, 30.0], runtime-clamped to MOVE_MAX_DURATION_S (5.0)"}},
+      {"type": "goto", "fields": {"target": "free string"}},
+      {"type": "arm", "fields": {"cmd": "GRAB | RELEASE | UP | DOWN"}}
+    ]
+  },
+
+  "data_flows": [
+    {"from": "camera", "to": "robot_brain", "via": "V4L2 / OpenCV VideoCapture", "payload": "BGR frame", "rate": "20 fps cap, buffer size 1, MJPG fourcc for low latency"},
+    {"from": "robot_brain", "to": "human_detector", "payload": "frame", "when": "mode HUMAN_TRACK"},
+    {"from": "robot_brain", "to": "line_follower", "payload": "frame", "when": "mode LFR"},
+    {"from": "robot_brain", "to": "vla", "payload": "frame copy on a worker thread", "when": "mode VLA and MSE change > 15"},
+    {"from": "robot_brain", "to": "robot_comms", "payload": "one command char", "rate": "every loop iteration, de-duplicated at the socket"},
+    {"from": "robot_comms", "to": "esp32", "via": "TCP :9999", "payload": "one ASCII byte"},
+    {"from": "robot_brain", "to": "web_server", "payload": "display frame", "note": "encoded only when a client is attached"},
+    {"from": "flutter_app", "to": "web_server", "via": "SocketIO", "payload": "mic PCM16, IMU, GPS, commands, force_listen"},
+    {"from": "web_server", "to": "voice_pipeline", "payload": "audio queue handle (400 deep, drop-oldest)"},
+    {"from": "voice_pipeline", "to": "llm_parser", "payload": "transcript + RobotState snapshot"},
+    {"from": "llm_parser", "to": "ollama", "via": "HTTP :11434", "payload": "prompt, format=json, temp 0.1, num_predict 300"},
+    {"from": "llm_parser", "to": "command_queue", "payload": "validated action tokens with correlation id"},
+    {"from": "command_queue", "to": "robot_comms", "payload": "command chars and timed sequences"},
+    {"from": "command_queue", "to": "robot_state", "payload": "mode and goto_target writes"},
+    {"from": "tts", "to": "flutter_app", "via": "SocketIO tts_audio", "payload": "WAV bytes", "when": "phone camera in use and phone connected"},
+    {"from": "tts", "to": "laptop speaker", "via": "aplay stdin", "payload": "WAV bytes", "when": "otherwise"},
+    {"from": "web_server", "to": "flutter_app", "via": "SocketIO state_update", "payload": "RobotState snapshot", "rate": "100 ms"},
+    {"from": "web_server", "to": "flutter_app", "via": "HTTP /frame", "payload": "MJPEG", "rate": "~15 fps"}
+  ],
+
+  "security": {
+    "controls": [
+      {"id": "secrets-in-env", "control": "JARVIS_SECRET_KEY and all paths come from .env, which is git-ignored. Nothing is hardcoded in Python.", "status": "enforced"},
+      {"id": "fail-closed-auth", "control": "A missing secret returns 503 and stops the web server from starting. Absence of config is never treated as permission.", "status": "enforced", "file": "web_server.py"},
+      {"id": "constant-time-compare", "control": "hmac.compare_digest on every bearer and handshake token check.", "status": "enforced"},
+      {"id": "llm-output-validation", "control": "Pydantic discriminated union validates every model action before execution; failures drop actions and keep speech only.", "status": "enforced"},
+      {"id": "command-allowlist", "control": "Socket boundary accepts only FBLRSGOUD; the board also stops on any unknown byte.", "status": "enforced, defence in depth"},
+      {"id": "duration-clamp", "control": "Move duration clamped to [0.1, 5.0] s at both the queue and the web handler, so a model or a client cannot drive indefinitely.", "status": "enforced"},
+      {"id": "payload-caps", "control": "1 MB request body, 512 KB audio frame, 8 KB sensor JSON, bounded queues with drop-oldest.", "status": "enforced"},
+      {"id": "rate-limit", "control": "flask-limiter, 5 commands per second per address.", "status": "enforced"},
+      {"id": "cors-allowlist", "control": "Origins reflected only from ALLOWED_ORIGINS; SocketIO uses the same list.", "status": "enforced"},
+      {"id": "state-immutability", "control": "RLock plus copy.deepcopy on every dict getter and on snapshot(); no mutable reference escapes.", "status": "enforced"},
+      {"id": "emergency-path", "control": "Emergency keywords (stop, halt, freeze, abort, emergency, cancel) short-circuit before the LLM, clear the queue and force IDLE.", "status": "enforced"}
+    ],
+    "findings": [
+      {
+        "severity": "high",
+        "id": "esp32-hardcoded-credentials",
+        "where": "backend/esp32/main/main.c lines 22-24",
+        "detail": "Wi-Fi SSID, Wi-Fi password and the brain server IP are hardcoded as string literals in a tracked source file. The credentials are in git history.",
+        "fix": "Move them to sdkconfig / Kconfig or NVS provisioning and rotate the Wi-Fi password."
+      },
+      {
+        "severity": "medium",
+        "id": "esp32-link-unauthenticated",
+        "where": "backend/esp32/robot_comms.py",
+        "detail": "The motor TCP port accepts the first client that connects, with no authentication. Anyone on the LAN can drive the robot.",
+        "fix": "Pre-shared key handshake on accept, or bind to a dedicated interface."
+      },
+      {
+        "severity": "low",
+        "id": "stale-dependency",
+        "where": "pyproject.toml",
+        "detail": "pvporcupine is still declared and documented, but the live wake word engine is openWakeWord.",
+        "fix": "Drop pvporcupine and correct the README and CLAUDE.md."
+      }
+    ]
+  },
+
+  "configuration": {
+    "required": [
+      {"var": "JARVIS_SECRET_KEY", "purpose": "bearer token for REST and the SocketIO handshake", "failure": "ConfigError at startup, 503 at runtime"}
+    ],
+    "voice": [
+      {"var": "JARVIS_VOICE", "default": "1"},
+      {"var": "JARVIS_PIPER_BIN", "validated": "must exist and be executable when voice is enabled"},
+      {"var": "JARVIS_PIPER_MODEL", "validated": "must exist"},
+      {"var": "JARVIS_PIPER_CONFIG", "validated": "must exist"},
+      {"var": "JARVIS_WHISPER_MODEL", "default": "small.en"},
+      {"var": "JARVIS_WHISPER_DEVICE", "default": "cpu"}
+    ],
+    "llm": [
+      {"var": "JARVIS_OLLAMA_URL", "default": "http://localhost:11434"},
+      {"var": "JARVIS_OLLAMA_MODEL", "default": "gemma4-e2b-nothink:latest"},
+      {"var": "JARVIS_OLLAMA_TIMEOUT_S", "default": "5.0"},
+      {"var": "JARVIS_OLLAMA_MAX_RETRIES", "default": "1"},
+      {"var": "JARVIS_OLLAMA_BACKOFF_BASE", "default": "1.5"}
+    ],
+    "hardware_and_limits": [
+      {"var": "JARVIS_ESP32_HOST", "default": "0.0.0.0"},
+      {"var": "JARVIS_ESP32_PORT", "default": "9999"},
+      {"var": "JARVIS_ESP32_RECONNECT_BASE_S", "default": "1.0"},
+      {"var": "JARVIS_ESP32_RECONNECT_MAX_S", "default": "30.0"},
+      {"var": "JARVIS_CMD_QUEUE_MAX", "default": "128"},
+      {"var": "JARVIS_MOVE_MAX_DURATION_S", "default": "5.0"},
+      {"var": "JARVIS_MAX_AUDIO_PAYLOAD_BYTES", "default": "512000"},
+      {"var": "JARVIS_MAX_SENSOR_PAYLOAD_BYTES", "default": "8192"},
+      {"var": "JARVIS_ALLOWED_ORIGINS", "default": "localhost and LAN dev origins"}
+    ],
+    "logging": [
+      {"var": "JARVIS_LOG_DIR", "default": "~/.jarvis/logs", "note": "created if missing"},
+      {"var": "JARVIS_LOG_LEVEL", "default": "INFO"},
+      {"var": "JARVIS_LOG_MAX_BYTES", "default": "10485760"},
+      {"var": "JARVIS_LOG_BACKUPS", "default": "5"}
+    ]
+  },
+
+  "failure_modes": [
+    {"failure": "Camera absent or unreadable", "handling": "CameraUnavailable caught, mode forced IDLE, voice and manual control keep working", "blast_radius": "vision only"},
+    {"failure": "ESP32 not connected", "handling": "send() returns False, background reconnect with jittered backoff up to 30 s; the CV loop never blocks", "blast_radius": "motion only"},
+    {"failure": "ESP32 link drops mid-run", "handling": "Board sees recv <= 0 and stops the motors before reconnecting; the laptop clears the client and schedules reconnect", "blast_radius": "motion stops, safe"},
+    {"failure": "Ollama down or slow", "handling": "Retry with backoff, then a safe fallback response with zero actions; startup health check warns but does not abort", "blast_radius": "reasoning only, robot stays still"},
+    {"failure": "Model emits malformed or hostile JSON", "handling": "Pydantic rejects it, actions are dropped, only speech survives", "blast_radius": "none"},
+    {"failure": "A supervised thread crashes", "handling": "ThreadSupervisor restarts it, up to 10 times in 60 s, then marks it degraded", "blast_radius": "one subsystem"},
+    {"failure": "Command queue floods", "handling": "Bounded at 128 with drop-oldest and a loud log line", "blast_radius": "oldest actions lost, no memory growth"},
+    {"failure": "Phone audio floods", "handling": "Queue bounded at 400 chunks, drop-oldest, oversize frames rejected with audio_error", "blast_radius": "latency held flat"},
+    {"failure": "No GUI backend for cv2.imshow", "handling": "Falls back to a pygame preview window", "blast_radius": "display only"},
+    {"failure": "Process shutdown", "handling": "finally block sends S, releases the camera, stops the supervisor, closes sockets, terminates TTS subprocesses", "blast_radius": "none"}
+  ],
+
+  "testing": {
+    "framework": "pytest with coverage gate --cov-fail-under=35",
+    "total_test_functions": 91,
+    "suites": [
+      {"path": "tests/unit", "count": 18, "covers": "RobotState locking, RobotComms translation and allow-list, utils"},
+      {"path": "tests/integration", "count": 12, "covers": "web server routes, auth, payload handling"},
+      {"path": "tests/e2e", "count": 27, "covers": "application workflows, system integration, security"},
+      {"path": "tests/test_resilience", "count": 34, "covers": "ESP32 disconnect, Ollama retry, payload bombs, queue exhaustion, missing devices, thread supervisor, logging setup"}
+    ]
+  },
+
+  "deployment": {
+    "backend": "uv sync, then uv run python -m backend.main. Dev flags: --no-socket, --no-web, --laptop, --no-wake-word (spacebar PTT).",
+    "camera_aliases": {"laptop": 0, "mobile": "/dev/video2", "phone": "/dev/video2"},
+    "phone_camera": "scrcpy --video-source=camera --camera-facing=back --v4l2-sink=/dev/video2 --no-audio --max-fps 30",
+    "mobile_app": "cd jarvis_app && flutter pub get && flutter build apk --debug",
+    "firmware": "cd backend/esp32 && idf.py set-target esp32 && idf.py flash monitor",
+    "containers": "Dockerfile and docker-compose.yml present at the repo root"
+  },
+
+  "known_gaps": [
+    "GOTO mode is accepted by the LLM schema, the queue and the web bridge, but the CV loop has no GOTO branch; it hits the unknown-mode guard and stops.",
+    "Arm commands G/O/U/D pass the socket allow-list but main.c has no arm handling; the board treats them as unknown and stops.",
+    "HybridLineFollower is ML-only. The OpenCV fallback the name implies is commented out, so a failed model load means LOST rather than degraded steering.",
+    "tracker.py hardcodes an absolute local path for the line classifier weights.",
+    "POST /api/llm/query is a 501 stub.",
+    "WebServer.update_conversation is a no-op kept only for compatibility.",
+    "Documentation drift: Porcupine vs openWakeWord, and the README shows a 300 ms state broadcast where the code ticks at 100 ms."
+  ]
+}
+</script>
+<script>
+const D = JSON.parse(document.getElementById('arch').textContent);
+const $ = (s)=>document.querySelector(s);
+const esc = (s)=>String(s??'').replace(/[&<>]/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;'}[c]));
+const el = (t,h)=>{const n=document.createElement(t); n.innerHTML=h; return n;};
+
+/* theme */
+const tog = $('#tog');
+const saved = localStorage.getItem('noir-theme');
+if(saved) document.documentElement.dataset.theme = saved;
+else if(window.matchMedia('(prefers-color-scheme: light)').matches) document.documentElement.dataset.theme='light';
+tog.onclick = ()=>{
+  const t = document.documentElement.dataset.theme === 'light' ? 'dark' : 'light';
+  document.documentElement.dataset.theme = t; localStorage.setItem('noir-theme', t);
+};
+
+/* hero */
+$('#hero-sub').textContent = D.meta.summary;
+$('#foot-date').textContent = D.meta.generated;
+const tiles = [
+  ['components', D.components.length],
+  ['layers', D.layers.length],
+  ['threads', D.runtime_threads.length],
+  ['data flows', D.data_flows.length],
+  ['tests', D.testing.total_test_functions],
+  ['open findings', D.security.findings.length],
+];
+$('#tiles').innerHTML = tiles.map(([k,v])=>`<div class="tile"><b>${v}</b><span>${k}</span></div>`).join('');
+
+/* nav */
+const secs = [...document.querySelectorAll('section')];
+$('#nav').innerHTML = secs.map(s=>`<a href="#${s.id}">${esc(s.querySelector('h2').childNodes[0].textContent.trim()||s.id)}</a>`).join('');
+const navLinks = [...document.querySelectorAll('#nav a')];
+const spy = new IntersectionObserver(es=>{
+  es.forEach(e=>{ if(e.isIntersecting){
+    navLinks.forEach(a=>a.classList.toggle('on', a.getAttribute('href') === '#'+e.target.id));
+  }});
+},{rootMargin:'-72px 0px -70% 0px'});
+secs.forEach(s=>spy.observe(s));
+
+/* components */
+const byLayer = Object.fromEntries(D.layers.map(l=>[l.id,l]));
+function cardHTML(c){
+  const kv = [];
+  if(c.concurrency) kv.push(['thread', c.concurrency]);
+  if(c.engine) kv.push(['engine', c.engine]);
+  if(c.model) kv.push(['model', c.model]);
+  if(c.platform) kv.push(['platform', c.platform]);
+  if(c.bind) kv.push(['bind', c.bind]);
+  if(c.topology) kv.push(['topology', c.topology]);
+  if(c.policy) kv.push(['policy', c.policy]);
+  if(c.backpressure) kv.push(['backpressure', c.backpressure]);
+  if(c.distance_policy) kv.push(['policy', c.distance_policy]);
+  if(c.pwm) kv.push(['pwm', c.pwm]);
+  if(c.warmup) kv.push(['warm-up', c.warmup]);
+  if(c.auth) kv.push(['auth', c.auth]);
+  if(c.parsing) kv.push(['parsing', c.parsing]);
+  if(c.resilience && !Array.isArray(c.resilience)) kv.push(['resilience', c.resilience]);
+  if(c.efficiency) kv.push(['efficiency', c.efficiency]);
+  if(c.downstream) kv.push(['downstream', c.downstream]);
+  if(c.notes) kv.push(['note', c.notes]);
+  if(c.discrepancy) kv.push(['drift', c.discrepancy]);
+
+  const lists = [];
+  const push = (label, arr)=>{ if(Array.isArray(arr)&&arr.length) lists.push(
+    `<div class="tag">${label}</div><ul class="tight">${arr.map(x=>`<li>${esc(typeof x==='string'?x:JSON.stringify(x))}</li>`).join('')}</ul>`); };
+  push('cycle', c.cycle); push('hardening', c.hardening); push('resilience', Array.isArray(c.resilience)?c.resilience:null);
+  push('degradation', c.degradation); push('cost control', c.cost_control); push('failsafe', c.failsafe);
+  push('details', c.details); push('endpoints', c.endpoints); push('supervises', c.supervises);
+  push('action types', c.action_types); push('fields', c.fields); push('packages', c.packages);
+  push('key symbols', c.key_symbols);
+  if(c.pins) lists.push(`<div class="tag">pins</div><ul class="tight">${Object.entries(c.pins).map(([k,v])=>`<li>${k} → ${v}</li>`).join('')}</ul>`);
+
+  return `<article class="card" data-layer="${c.layer}">
+    <h3>${esc(c.name)}</h3>
+    <div class="path">${esc(c.file||'')}${c.loc?` · ${c.loc} loc`:''}</div>
+    <p>${esc(c.responsibility||c.purpose||'')}</p>
+    ${kv.length?`<div class="kv">${kv.map(([k,v])=>`<div><b>${k}</b><span>${esc(v)}</span></div>`).join('')}</div>`:''}
+    ${lists.join('')}
+  </article>`;
+}
+function renderCards(f){
+  $('#cards').innerHTML = D.components.filter(c=>f==='all'||c.layer===f).map(cardHTML).join('');
+}
+$('#chips').innerHTML = [`<span class="chip on" data-f="all">all · ${D.components.length}</span>`]
+  .concat(D.layers.map(l=>{
+    const n = D.components.filter(c=>c.layer===l.id).length;
+    return `<span class="chip" data-f="${l.id}" title="${esc(l.purpose)}">${esc(l.name)} · ${n}</span>`;
+  })).join('');
+$('#chips').onclick = e=>{
+  const c = e.target.closest('.chip'); if(!c) return;
+  document.querySelectorAll('.chip').forEach(x=>x.classList.toggle('on', x===c));
+  renderCards(c.dataset.f);
+};
+renderCards('all');
+
+/* table helper */
+function table(target, cols, rows){
+  $(target).innerHTML = `<table><thead><tr>${cols.map(c=>`<th>${c}</th>`).join('')}</tr></thead>
+    <tbody>${rows.map(r=>`<tr>${r.map(c=>`<td>${c}</td>`).join('')}</tr>`).join('')}</tbody></table>`;
+}
+table('#t-threads', ['Thread','Owner','Kind','Role'],
+  D.runtime_threads.map(t=>[`<code>${esc(t.name)}</code>`, esc(t.owner), esc(t.kind), esc(t.role)]));
+
+table('#t-modes', ['Mode','Emits','Key','Behaviour'],
+  D.modes.map(m=>[`<strong>${esc(m.id)}</strong>${m.status?` <span class="sev medium">${esc(m.status)}</span>`:''}`,
+    `<code>${esc(m.command)}</code>`, m.hotkey?`<code>${esc(m.hotkey)}</code>`:'—', esc(m.description)]));
+
+/* protocols */
+const tcp = D.protocols.esp32_tcp;
+$('#p-tcp').innerHTML = `<p style="font-size:13px;color:var(--dim);margin-bottom:12px">${esc(tcp.transport)}. ${esc(tcp.payload)}.</p>
+  <ul class="tight">${Object.entries(tcp.commands).map(([k,v])=>`<li><code>${k}</code> — ${esc(v)}</li>`).join('')}</ul>
+  <div class="tag">sent, unimplemented on board</div>
+  <ul class="tight">${Object.entries(tcp.arm_commands_sent_but_not_implemented_on_board).map(([k,v])=>`<li><code>${k}</code> — ${esc(v)}</li>`).join('')}</ul>`;
+
+$('#p-actions').innerHTML = `<p style="font-size:13px;color:var(--dim);margin-bottom:12px">${esc(D.action_schema.enforcement)}</p>
+  <ul class="tight">${D.action_schema.actions.map(a=>`<li><code>${esc(a.type)}</code> — ${Object.entries(a.fields).map(([k,v])=>`${k}: ${esc(v)}`).join(' · ')}</li>`).join('')}</ul>
+  <div class="tag">${esc(D.action_schema.validator)}</div>`;
+
+const sio = D.protocols.socketio;
+table('#t-sio', ['Direction','Event','Payload','Notes'],
+  sio.phone_to_laptop.map(e=>['phone → laptop',`<code>${esc(e.event)}</code>`,esc(e.payload),esc(e.limit||e.effect||'')])
+  .concat(sio.laptop_to_phone.map(e=>['laptop → phone',`<code>${esc(e.event)}</code>`,esc(e.payload),esc(e.cadence||'')])));
+
+table('#t-http', ['Method','Path','Auth','Returns / limits'],
+  D.protocols.http.map(h=>[`<strong>${esc(h.method)}</strong>`,`<code>${esc(h.path)}</code>`,
+    h.auth==='bearer'?'<span class="sev low">bearer</span>':'<span class="sev medium">none</span>',
+    esc([h.returns,h.rate_limit&&`rate ${h.rate_limit}`,h.body].filter(Boolean).join(' · '))]));
+
+table('#t-flows', ['From','To','Transport','Payload','Rate'],
+  D.data_flows.map(f=>[`<strong>${esc(f.from)}</strong>`, `<strong>${esc(f.to)}</strong>`,
+    esc(f.via||'in-process'), esc(f.payload||''), esc(f.rate||f.when||f.note||'—')]));
+
+/* security */
+$('#p-ctrl').innerHTML = `<ul class="tight">${D.security.controls.map(c=>
+  `<li><span class="ok-dot">✓</span> <strong style="color:var(--text)">${esc(c.id)}</strong> — ${esc(c.control)}</li>`).join('')}</ul>`;
+$('#p-find').innerHTML = D.security.findings.map(f=>
+  `<div style="padding:12px 0;border-bottom:1px solid var(--line)">
+     <div style="display:flex;gap:10px;align-items:center;margin-bottom:6px">
+       <span class="sev ${f.severity}">${f.severity}</span><strong style="color:var(--text);font-size:13.5px">${esc(f.id)}</strong>
+     </div>
+     <div class="path">${esc(f.where)}</div>
+     <p style="font-size:13px;color:var(--dim);margin-top:8px">${esc(f.detail)}</p>
+     <p style="font-size:12.5px;color:var(--acc-dim);margin-top:6px">fix: ${esc(f.fix)}</p>
+   </div>`).join('');
+
+table('#t-fail', ['Failure','Handling','Blast radius'],
+  D.failure_modes.map(f=>[`<strong>${esc(f.failure)}</strong>`, esc(f.handling),
+    `<span class="mono">${esc(f.blast_radius)}</span>`]));
+
+/* config */
+$('#p-config').innerHTML = Object.entries(D.configuration).map(([group,vars])=>
+  `<div class="panel"><h3>${group.replace(/_/g,' ')}</h3><ul class="tight">${vars.map(v=>
+    `<li><code>${esc(v.var)}</code>${v.default?` = ${esc(v.default)}`:''}${v.purpose?` — ${esc(v.purpose)}`:''}${v.validated?` — ${esc(v.validated)}`:''}${v.failure?` <span style="color:var(--bad)">(${esc(v.failure)})</span>`:''}${v.note?` — ${esc(v.note)}`:''}</li>`).join('')}</ul></div>`).join('');
+
+/* ops */
+$('#p-tests').innerHTML = `<p style="font-size:13px;color:var(--dim);margin-bottom:12px">${esc(D.testing.framework)}</p>
+  <ul class="tight">${D.testing.suites.map(s=>`<li><code>${esc(s.path)}</code> · ${s.count} tests — ${esc(s.covers)}</li>`).join('')}</ul>`;
+$('#p-deploy').innerHTML = `<ul class="tight">${Object.entries(D.deployment).map(([k,v])=>
+  `<li><b style="color:var(--faint);font-family:var(--mono);font-size:11px;text-transform:uppercase;letter-spacing:.09em">${k.replace(/_/g,' ')}</b><br>${esc(typeof v==='string'?v:JSON.stringify(v))}</li>`).join('')}</ul>`;
+$('#p-gaps').innerHTML = D.known_gaps.map(g=>`<li>${esc(g)}</li>`).join('');
+
+/* ── neuron graph ─────────────────────────────────────────────────────────
+   ponytail: hand-rolled O(n^2) repulsion. 26 nodes, ~50 edges — a quadtree
+   would buy nothing here. Swap to Barnes-Hut only if the node count ~10x. */
+(function neuro(){
+  const G = D.graph, cv = $('#neuro'), ctx = cv.getContext('2d'), tip = $('#tip');
+  const reduce = window.matchMedia('(prefers-reduced-motion: reduce)').matches;
+  const COL = G.layer_colors, KIND = {
+    frame:'#3ddc97', command:'#ff5c6c', state:'#00e5ff',
+    audio:'#a78bfa', model:'#ffc857', network:'#7dd3fc', supervise:'#8b95a3'
+  };
+  const N = G.nodes.map((n,i)=>({...n, x:0, y:0, vx:0, vy:0, i}));
+  const idx = Object.fromEntries(N.map(n=>[n.id,n]));
+  const E = G.edges.map(e=>({...e, a:idx[e.from], b:idx[e.to], t:Math.random()}))
+                   .filter(e=>e.a&&e.b);
+  N.forEach(n=>{ n.deg = E.filter(e=>e.a===n||e.b===n).length; });
+  const R = n => 6 + n.size*2.6 + Math.min(n.deg,10)*0.5;
+  // labels sit centred under each node, so the walls must clear half a label
+  // plus the floating toolbar at the top
+  function clamp(n){
+    const hw = (n.lw||40)/2 + 8, r = R(n);
+    n.x = Math.max(hw, Math.min(W-hw, n.x));
+    n.y = Math.max(56+r, Math.min(H-28-r, n.y));
+  }
+
+  let W=0, H=0, dpr=1, alpha=1, hover=null, drag=null, filter='all', seeded=false;
+  function size(){
+    dpr = Math.min(devicePixelRatio||1, 2);
+    W = cv.clientWidth || 900; H = cv.clientHeight || 620;
+    cv.width = W*dpr; cv.height = H*dpr;
+    ctx.setTransform(dpr,0,0,dpr,0,0);
+    ctx.font = '500 11.5px ui-monospace, Menlo, monospace';
+    N.forEach(n=>{ n.lw = ctx.measureText(n.label).width; });
+    if(!seeded){ seed(); seeded = true; }
+  }
+  // seed on a layer ring around the real centre, deterministic across loads
+  const order = Object.keys(COL);
+  function seed(){
+    N.forEach((n,i)=>{
+      const li = order.indexOf(n.layer), a = (i/N.length)*Math.PI*2;
+      n.x = W/2 + Math.cos(a)*(W*0.22 + li*12);
+      n.y = H/2 + Math.sin(a)*(H*0.30 + li*8);
+    });
+    for(let i=0;i<500;i++) step();   // warm start: appear settled, not exploding
+    alpha = 0.35;
+  }
+  new ResizeObserver(size).observe(cv); size();
+
+  function step(){
+    // scale forces to the viewport so the graph fills whatever space it gets
+    const spacing = Math.sqrt((W*H)/N.length) * 0.78;
+    const k = spacing*spacing*0.34, cx = W/2, cy = H/2;
+    for(let i=0;i<N.length;i++){
+      const a = N[i];
+      for(let j=i+1;j<N.length;j++){
+        const b = N[j];
+        let dx = b.x-a.x, dy = b.y-a.y, d2 = dx*dx+dy*dy || 0.01;
+        let d = Math.sqrt(d2);
+        const f = k/Math.max(d2, 400);
+        const ux = dx/d, uy = dy/d;
+        a.vx -= ux*f; a.vy -= uy*f; b.vx += ux*f; b.vy += uy*f;
+        // hard separation: labels sit under the node, so keep a text-wide gap
+        const min = Math.max(R(a)+R(b)+34, ((a.lw||40)+(b.lw||40))/2 + 20);
+        if(d < min){ const push=(min-d)*0.34; a.x-=ux*push; a.y-=uy*push; b.x+=ux*push; b.y+=uy*push; }
+      }
+      // elliptical gravity: the canvas is wide, so pull harder vertically
+      a.vx += (cx-a.x)*0.0011; a.vy += (cy-a.y)*0.0026;
+    }
+    for(const e of E){
+      const dx = e.b.x-e.a.x, dy = e.b.y-e.a.y;
+      const d = Math.hypot(dx,dy)||0.01, rest = spacing*0.92;
+      const f = (d-rest)*0.010, ux = dx/d, uy = dy/d;
+      e.a.vx += ux*f; e.a.vy += uy*f; e.b.vx -= ux*f; e.b.vy -= uy*f;
+    }
+    for(const n of N){
+      if(n===drag) continue;
+      n.vx *= 0.82; n.vy *= 0.82;
+      n.x += n.vx*alpha; n.y += n.vy*alpha;
+      clamp(n);
+    }
+    alpha = Math.max(0.12, alpha*0.995);
+  }
+  const dim = (c,a)=>{ const n=parseInt(c.slice(1),16);
+    return `rgba(${n>>16&255},${n>>8&255},${n&255},${a})`; };
+  const active = n => (filter==='all'||n.layer===filter);
+  const near = n => !hover || hover===n || E.some(e=>(e.a===hover&&e.b===n)||(e.b===hover&&e.a===n));
+
+  function draw(){
+    ctx.clearRect(0,0,W,H);
+    for(const e of E){
+      const on = (!hover || e.a===hover || e.b===hover);
+      const vis = active(e.a)&&active(e.b);
+      const base = KIND[e.kind]||'#8b95a3';
+      const mx = (e.a.x+e.b.x)/2 + (e.a.y-e.b.y)*0.08;
+      const my = (e.a.y+e.b.y)/2 + (e.b.x-e.a.x)*0.08;
+      ctx.beginPath(); ctx.moveTo(e.a.x,e.a.y); ctx.quadraticCurveTo(mx,my,e.b.x,e.b.y);
+      ctx.strokeStyle = dim(base, vis ? (on?0.55:0.10) : 0.05);
+      ctx.lineWidth = on&&hover ? 1.8 : 1;
+      if(e.kind==='supervise') ctx.setLineDash([4,5]); else ctx.setLineDash([]);
+      ctx.stroke(); ctx.setLineDash([]);
+      // signal pulse
+      if(vis && (on || !hover)){
+        const t = e.t, it = 1-t;
+        const px = it*it*e.a.x + 2*it*t*mx + t*t*e.b.x;
+        const py = it*it*e.a.y + 2*it*t*my + t*t*e.b.y;
+        ctx.beginPath(); ctx.arc(px,py, on&&hover?3:2.2, 0, 6.2832);
+        ctx.fillStyle = dim(base, on?0.95:0.5); ctx.fill();
+        ctx.beginPath(); ctx.arc(px,py, on&&hover?9:6, 0, 6.2832);
+        ctx.fillStyle = dim(base, 0.10); ctx.fill();
+      }
+    }
+    for(const n of N){
+      const c = COL[n.layer]||'#8b95a3', r = R(n);
+      const vis = active(n), lit = near(n);
+      const a = vis ? (lit?1:0.18) : 0.10;
+      ctx.beginPath(); ctx.arc(n.x,n.y,r*2.4,0,6.2832);
+      ctx.fillStyle = dim(c, 0.10*a); ctx.fill();
+      ctx.beginPath(); ctx.arc(n.x,n.y,r,0,6.2832);
+      ctx.fillStyle = dim(c, 0.30*a); ctx.fill();
+      ctx.lineWidth = hover===n ? 2.4 : 1.4; ctx.strokeStyle = dim(c, a);
+      ctx.stroke();
+      ctx.font = `${hover===n?600:500} 11.5px ui-monospace, Menlo, monospace`;
+      ctx.textAlign='center'; ctx.textBaseline='top';
+      ctx.fillStyle = dim(c, Math.min(a,0.92));
+      ctx.fillText(n.label, n.x, n.y + r + 5);
+    }
+  }
+
+  function frame(){
+    if(alpha>0.13 || drag) step();
+    if(!reduce) for(const e of E){ e.t += 0.0055 + (e.kind==='command'?0.004:0); if(e.t>1) e.t=0; }
+    draw(); requestAnimationFrame(frame);
+  }
+  frame();
+
+  const at = (ev)=>{
+    const r = cv.getBoundingClientRect();
+    const x = ev.clientX-r.left, y = ev.clientY-r.top;
+    return N.find(n=>active(n) && Math.hypot(n.x-x,n.y-y) < R(n)+9) || null;
+  };
+  cv.addEventListener('pointermove', ev=>{
+    const r = cv.getBoundingClientRect();
+    if(drag){ drag.x = ev.clientX-r.left; drag.y = ev.clientY-r.top; drag.vx=drag.vy=0; clamp(drag); alpha=Math.max(alpha,.5); }
+    const n = drag || at(ev);
+    hover = n;
+    if(n){
+      const outs = E.filter(e=>e.a===n).length, ins = E.filter(e=>e.b===n).length;
+      tip.innerHTML = `<b>${esc(n.label)}</b><span>${esc(n.note||'')}</span>
+        <em>${esc(n.layer)} · ${ins} in · ${outs} out</em>`;
+      tip.classList.add('on');
+      const tx = Math.min(Math.max(n.x+16, 8), cv.clientWidth-290);
+      tip.style.left = tx+'px'; tip.style.top = Math.max(8, n.y+16)+'px';
+      cv.style.cursor = 'pointer';
+    } else { tip.classList.remove('on'); cv.style.cursor = 'grab'; }
+  });
+  cv.addEventListener('pointerleave', ()=>{ hover=null; drag=null; tip.classList.remove('on'); });
+  cv.addEventListener('pointerdown', ev=>{ const n=at(ev); if(n){ drag=n; cv.setPointerCapture(ev.pointerId);} });
+  cv.addEventListener('pointerup', ev=>{
+    const n = drag || at(ev);
+    if(n && Math.hypot(n.vx,n.vy) < 40){
+      const comp = D.components.find(c=>c.id===n.id);
+      if(comp){
+        document.querySelector('.chip[data-f="all"]').click();
+        const card = [...document.querySelectorAll('.card')].find(c=>c.querySelector('h3').textContent===comp.name);
+        if(card){ card.scrollIntoView({block:'center'}); card.classList.add('flash');
+          setTimeout(()=>card.classList.remove('flash'), 1600); }
+      }
+    }
+    drag = null;
+  });
+
+  // layer filter + kind legend
+  $('#neuro-bar').innerHTML =
+    `<span class="chip on" data-f="all">all</span>` +
+    Object.keys(COL).map(l=>`<span class="chip" data-f="${l}" style="color:${COL[l]}">${l}</span>`).join('') +
+    `<span class="neuro-hint">drag · hover · click</span>`;
+  $('#neuro-bar').onclick = e=>{
+    const c = e.target.closest('.chip'); if(!c) return;
+    $('#neuro-bar').querySelectorAll('.chip').forEach(x=>x.classList.toggle('on', x===c));
+    filter = c.dataset.f; alpha = 0.6;
+  };
+  $('#kinds').innerHTML = Object.entries(G.edge_kinds).map(([k,v])=>
+    `<span><i style="background:${KIND[k]}"></i>${k} — ${esc(v)}</span>`).join('');
+})();
+</script>
+</body>
+</html>

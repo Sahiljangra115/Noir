@@ -71,7 +71,7 @@ def disable_hardware():
 
     # Mock hardware-dependent modules
     mock_modules = {
-        'pvporcupine': MagicMock(),
+        'openwakeword': MagicMock(),
         'sounddevice': MagicMock(),
         'serial': MagicMock(),
     }

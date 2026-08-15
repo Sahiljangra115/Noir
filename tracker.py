@@ -32,7 +32,14 @@ from torchvision import models, transforms
 
 # ─────────────────────────── config ───────────────────────────────────────────
 
-MODEL_PATH = '/home/ladliju/Developer/Model_finetune/line_classifier.pth'
+import os as _os
+
+# Local fine-tuned weights. Machine-specific, so it is env-overridable and the
+# loader falls back to HuggingFace and then to the OpenCV scanner.
+MODEL_PATH = _os.environ.get(
+    "JARVIS_LINE_MODEL",
+    _os.path.expanduser("~/Developer/Model_finetune/line_classifier.pth"),
+)
 IMG_SIZE = 224
 DEVICE = 'cuda' if torch.cuda.is_available() else 'cpu'
 CLASS_NAMES = ['Move Left', 'Move Right', 'No Line', 'Straight', 'Turn Left', 'Turn Right']
@@ -128,13 +135,18 @@ def build_command(cx, cy, frame_w, frame_h, focal_px, distance_m, kind) -> Comma
 
 class HumanDetector:
     def __init__(self):
+        self.model = None
+        self.enabled = False
         try:
             from ultralytics import YOLO
             self.model = YOLO("yolov8n.pt")
             self.model.overrides['verbose'] = False
             self.enabled = True
-        except ImportError:
-            self.enabled = False
+        except Exception as exc:
+            # Not just ImportError: the constructor also downloads weights, so a
+            # missing file or an offline machine used to abort RobotBrain
+            # construction entirely instead of degrading to no-detections.
+            print(f"[YOLO] Detector unavailable ({exc}); human tracking disabled.")
 
     def detect(self, frame: np.ndarray) -> List[Detection]:
         if not self.enabled or frame is None: return []
@@ -169,22 +181,97 @@ class BoxDetector:
 
 # ─────────────────────────── line follower ───────────────────────────────────────
 
-# Legacy OpenCV logic disabled to enforce ML-only operation
-"""
 class LineFollower:
-    # ... logic for classic CV line following ...
-"""
+    """Classic OpenCV line scanner: CLAHE + adaptive threshold + row sampling.
+
+    This is the fallback half of HybridLineFollower. It carries no weights, so
+    it works on any machine and keeps LFR mode usable when the .pth is absent.
+    """
+
+    def scan(self, frame: np.ndarray) -> LineResult:
+        fh, fw = frame.shape[:2]
+        y_top, y_bot = int(fh * LINE_SCAN_TOP_FRAC), int(fh * LINE_SCAN_BOT_FRAC)
+        if y_bot <= y_top:
+            return LineResult(False, 0.0, "LOST", "CV: bad scan window", [])
+
+        gray = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
+        gray = cv2.createCLAHE(
+            clipLimit=LINE_CLAHE_CLIP, tileGridSize=LINE_CLAHE_GRID
+        ).apply(gray)
+        # THRESH_BINARY_INV: the line is darker than the floor, so invert to
+        # make line pixels the non-zero ones.
+        mask = cv2.adaptiveThreshold(
+            gray, 255, cv2.ADAPTIVE_THRESH_GAUSSIAN_C, cv2.THRESH_BINARY_INV,
+            LINE_ADAPTIVE_BLOCK, LINE_ADAPTIVE_C,
+        )
+
+        max_width = int(fw * LINE_MAX_WIDTH_FRAC)
+        centroids: List[Tuple[int, int]] = []
+        for i in range(LINE_NUM_SCAN_ROWS):
+            y = y_top + (y_bot - y_top) * i // max(LINE_NUM_SCAN_ROWS - 1, 1)
+            y = min(y, fh - 1)
+            run = self._widest_run(mask[y], LINE_MIN_WIDTH_PX, max_width)
+            if run is not None:
+                centroids.append((run, y))
+
+        if not centroids:
+            return LineResult(False, 0.0, "LOST", "CV: no line", [])
+
+        mid_x = fw // 2
+        mean_x = sum(cx for cx, _ in centroids) / len(centroids)
+        error_frac = (mean_x - mid_x) / max(mid_x, 1)
+
+        if error_frac < -LINE_STEER_DEAD_ZONE:
+            steer = "LEFT"
+        elif error_frac > LINE_STEER_DEAD_ZONE:
+            steer = "RIGHT"
+        else:
+            steer = "STRAIGHT"
+
+        return LineResult(
+            True, error_frac, steer,
+            f"CV: {steer} (err={error_frac:+.2f}, {len(centroids)}/{LINE_NUM_SCAN_ROWS} rows)",
+            centroids,
+        )
+
+    @staticmethod
+    def _widest_run(row: np.ndarray, min_w: int, max_w: int) -> Optional[int]:
+        """Centre x of the widest plausible run of line pixels in one image row."""
+        on = row > 0
+        if not on.any():
+            return None
+        # Run boundaries: indices where the on/off state flips.
+        edges = np.flatnonzero(np.diff(on.astype(np.int8)))
+        starts = np.r_[0, edges + 1]
+        ends = np.r_[edges + 1, on.size]
+        best_w, best_c = 0, None
+        for s, e in zip(starts, ends):
+            if not on[s]:
+                continue
+            w = e - s
+            if min_w <= w <= max_w and w > best_w:
+                best_w, best_c = w, (s + e) // 2
+        return best_c
+
 
 class HybridLineFollower:
+    """MobileNetV2 classifier with the OpenCV scanner as fallback.
+
+    Falls back per call, not just at startup: a runtime inference error drops to
+    the CV scanner for that frame instead of reporting a phantom "searching"
+    state that stops the robot.
+    """
+
     def __init__(self):
         self.use_model = False
         self._line_model = None
+        self._cv_fallback = LineFollower()
         self._tf = transforms.Compose([
             transforms.ToPILImage(), transforms.Resize((224, 224)), transforms.ToTensor(),
             transforms.Normalize([0.485, 0.456, 0.406], [0.229, 0.224, 0.225]),
         ])
         
-        import os
+        os = _os
         path = None
         if os.path.exists(MODEL_PATH):
             print(f"[ML-CHECK] Attempting to load local weights: {MODEL_PATH}")
@@ -215,10 +302,17 @@ class HybridLineFollower:
             except Exception as e:
                 print(f"❌ ML ERROR: Load Failed: {e}")
 
+        if not self.use_model:
+            print("[ML-CHECK] No weights available — LFR runs on the OpenCV scanner.")
+
     def scan(self, frame: np.ndarray) -> LineResult:
         if self.use_model and self._line_model is not None:
             try:
-                tensor = self._tf(frame).unsqueeze(0).to(DEVICE)
+                # ToPILImage reads the array as RGB. OpenCV frames are BGR, so
+                # without this swap the model sees inverted colour channels and
+                # scores badly on inputs it was trained to handle.
+                rgb = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
+                tensor = self._tf(rgb).unsqueeze(0).to(DEVICE)
                 with torch.no_grad():
                     probs = torch.softmax(self._line_model(tensor), dim=1)
                     conf, pred = probs.max(dim=1)
@@ -233,8 +327,11 @@ class HybridLineFollower:
                 centroids = [(target_x, y_top + 20), (target_x, (y_top + y_bot)//2), (target_x, y_bot - 20)]
                 return LineResult(label != "No Line", 0.0, steer, f"ML: {label} ({conf.item()*100:.1f}%)", centroids if label != "No Line" else [], True, conf.item())
             except Exception as e:
-                print(f"❌ ML RUNTIME ERROR: {e}")
-        return LineResult(False, 0.0, "LOST", "ML Active - Searching...", [], True)
+                print(f"❌ ML RUNTIME ERROR: {e} — falling back to OpenCV scan")
+
+        # is_ml stays False here so the HUD does not print "AI ACTIVE" and a
+        # confidence bar for a result no model produced.
+        return self._cv_fallback.scan(frame)
 
     @staticmethod
     def map_label_to_steer(label):

@@ -5,13 +5,14 @@ Wake-word detector backed by openWakeWord (Apache-2.0).
 
 Replaces Porcupine. No vendor key required.
 
-Default keyword maps:
-    "jarvis" / "hey_jarvis"  → hey_jarvis_v0.1.onnx
-    "alexa"                  → alexa_v0.1.onnx
-    "hey_mycroft"            → hey_mycroft_v0.1.onnx
+Keyword maps (openWakeWord ships a fixed set of stock models; an arbitrary
+phrase cannot be used without training a new model):
+    "jarvis" / "hey_jarvis"  → hey_jarvis_v0.1.onnx   ("Hey Jarvis")
+    "alexa"                  → alexa_v0.1.onnx        ("Alexa")
+    "hey_mycroft"            → hey_mycroft_v0.1.onnx  ("Hey Mycroft")
 
 Usage:
-    det = WakeWordDetector(keyword="jarvis", sensitivity=0.5)
+    det = WakeWordDetector(keyword="hey_jarvis", sensitivity=0.5)
     det.wait_for_wakeword()   # blocks until detected
     det.close()
 """
@@ -30,11 +31,21 @@ _KEYWORD_TO_MODEL_FILE = {
     "hey_mycroft": "hey_mycroft_v0.1",
 }
 
+# What the user actually has to say out loud, per keyword. The keyword is a
+# model identifier, not a phrase: prompting the user with "say hey_jarvis" is
+# both wrong and unpronounceable.
+_KEYWORD_TO_PHRASE = {
+    "jarvis": "Hey Jarvis",
+    "hey_jarvis": "Hey Jarvis",
+    "alexa": "Alexa",
+    "hey_mycroft": "Hey Mycroft",
+}
+
 
 class WakeWordDetector:
     def __init__(
         self,
-        keyword: str = "jarvis",
+        keyword: str = "hey_jarvis",
         sensitivity: float = 0.5,
         access_key: str | None = None,
     ) -> None:
@@ -42,8 +53,24 @@ class WakeWordDetector:
         self.sensitivity = float(sensitivity)
         self._model = None
         self._model_key = _KEYWORD_TO_MODEL_FILE.get(self.keyword, "hey_jarvis_v0.1")
+        self.spoken_name = _KEYWORD_TO_PHRASE.get(self.keyword, "Hey Jarvis")
         if access_key:
             log.debug("[WAKE] access_key arg ignored — openWakeWord requires no key")
+
+    def _score(self, frame) -> float:
+        """Highest wake-word score for one 1280-sample frame.
+
+        Keyed off the prediction dict rather than assuming the key equals
+        ``_model_key``: openWakeWord derives its keys from the model filename, so
+        a naming change would otherwise pin the score at 0.0 and the detector
+        would listen forever without ever waking.
+        """
+        scores = self._model.predict(frame)
+        if self._model_key in scores:
+            return float(scores[self._model_key])
+        if not scores:
+            return 0.0
+        return float(max(scores.values()))
 
     def _load(self) -> None:
         if self._model is not None:
@@ -70,10 +97,14 @@ class WakeWordDetector:
             "[WAKE] openWakeWord ready — model='%s' (sens=%.2f) frame=%d sr=%d",
             self._model_key, self.sensitivity, _FRAME_SAMPLES, _SAMPLE_RATE,
         )
-        print(f"[WAKE] Say '{self.keyword.capitalize()}' to activate.")
+        print(f"[WAKE] Say '{self.spoken_name}' to activate.")
 
-    def wait_for_wakeword(self) -> None:
-        """Block until wake word detected on default mic."""
+    def wait_for_wakeword(self, stop_event=None) -> bool:
+        """Block until the wake word is heard on the default mic.
+
+        Returns True on detection, False if ``stop_event`` fires first (used by
+        the pipeline so a push-to-talk tap can pre-empt the wait).
+        """
         self._load()
 
         try:
@@ -98,10 +129,11 @@ class WakeWordDetector:
             blocksize=_FRAME_SAMPLES,
         ) as stream:
             while True:
+                if stop_event is not None and stop_event.is_set():
+                    return False
                 pcm_chunk, _ = stream.read(_FRAME_SAMPLES)
                 audio = np.asarray(pcm_chunk, dtype=np.int16).flatten()
-                scores = self._model.predict(audio)
-                score = float(scores.get(self._model_key, 0.0))
+                score = self._score(audio)
                 recent_scores.append(score)
                 if len(recent_scores) > SMOOTH_WINDOW:
                     recent_scores.pop(0)
@@ -112,8 +144,8 @@ class WakeWordDetector:
                         "[WAKE] '%s' detected (peak=%.2f smooth=%.2f thresh=%.2f)",
                         self.keyword, peak, smooth, self.sensitivity,
                     )
-                    print(f"\n[WAKE] '{self.keyword.capitalize()}' detected — listening…")
-                    return
+                    print(f"\n[WAKE] '{self.spoken_name}' detected — listening…")
+                    return True
 
     def wait_for_wakeword_from_queue(
         self,
@@ -153,8 +185,7 @@ class WakeWordDetector:
             while buf.size >= _FRAME_SAMPLES:
                 frame = buf[:_FRAME_SAMPLES]
                 buf = buf[_FRAME_SAMPLES:]
-                scores = self._model.predict(frame)
-                score = float(scores.get(self._model_key, 0.0))
+                score = self._score(frame)
                 recent_scores.append(score)
                 if len(recent_scores) > SMOOTH_WINDOW:
                     recent_scores.pop(0)
@@ -166,7 +197,7 @@ class WakeWordDetector:
                         "[WAKE] '%s' detected (phone peak=%.2f smooth=%.2f thresh=%.2f)",
                         self.keyword, peak, smooth, self.sensitivity,
                     )
-                    print(f"\n[WAKE] '{self.keyword.capitalize()}' detected (phone) — listening…")
+                    print(f"\n[WAKE] '{self.spoken_name}' detected (phone) — listening…")
                     return True
 
     def close(self) -> None:

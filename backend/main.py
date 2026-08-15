@@ -76,30 +76,22 @@ from tracker import (
 )
 
 # ── Logging ───────────────────────────────────────────────────────────────────
-_LOG_FORMAT = "%(asctime)s  %(levelname)-7s  %(message)s"
-_LOG_DATEFMT = "%H:%M:%S"
+# Delegated to logging_setup, which attaches the correlation-ID filter along with
+# the handlers. This module used to build its own handlers inline, so the corr_id
+# that voice_pipeline sets per conversation never reached any log line and the
+# JSON file handler was dead code.
+from backend.services.logging_setup import setup_logging
 
 _root_logger = logging.getLogger()
-_root_logger.setLevel(getattr(logging, str(config.LOG_LEVEL).upper(), logging.INFO))
 # Clear any pre-existing handlers (e.g. from a prior basicConfig call in tests).
 for _h in list(_root_logger.handlers):
     _root_logger.removeHandler(_h)
 
-_console_handler = logging.StreamHandler()
-_console_handler.setFormatter(logging.Formatter(_LOG_FORMAT, _LOG_DATEFMT))
-_root_logger.addHandler(_console_handler)
-
 try:
-    config.LOG_DIR.mkdir(parents=True, exist_ok=True)
-    _file_handler = logging.handlers.RotatingFileHandler(
-        config.LOG_DIR / "jarvis.log",
-        maxBytes=config.LOG_MAX_BYTES,
-        backupCount=config.LOG_BACKUPS,
-    )
-    _file_handler.setFormatter(logging.Formatter(_LOG_FORMAT, _LOG_DATEFMT))
-    _root_logger.addHandler(_file_handler)
+    setup_logging()
 except Exception as _exc:  # pragma: no cover - log dir misconfig shouldn't kill startup
-    _root_logger.warning("[LOG] Could not attach RotatingFileHandler: %s", _exc)
+    logging.basicConfig(level=logging.INFO)
+    logging.getLogger(__name__).warning("[LOG] setup_logging failed: %s", _exc)
 
 log = logging.getLogger(__name__)
 
@@ -159,9 +151,9 @@ class RobotBrain:
         web_port:  int  = 5000,
         use_socket: bool = True,
         use_web:    bool = True,
-        vla_model:  str  = "gemma4-e2b-nothink:latest",
-        wake_sens:  float = 0.5,
-        wake_keyword: str = "alexa",
+        vla_model:  str  = config.OLLAMA_MODEL,
+        wake_sens:  float = config.WAKE_SENSITIVITY,
+        wake_keyword: str = config.WAKE_KEYWORD,
         stt_threshold: int = 850,
         use_wake_word: bool = True,
     ) -> None:
@@ -217,7 +209,6 @@ class RobotBrain:
 
         # Memory optimization: object pooling for frequent allocations
         self._frame_pool = deque(maxlen=3)  # Pool of reusable frame copies
-        self._shape_cache = {}  # Cache frame shapes to avoid recalculation
 
         # Thread supervisor (wired in run() after services start)
         self._supervisor: Optional[ThreadSupervisor] = None
@@ -227,7 +218,6 @@ class RobotBrain:
     def _get_pooled_frame_copy(self, frame: np.ndarray) -> np.ndarray:
         """Get a frame copy using object pooling to reduce allocations."""
         frame_shape = frame.shape
-        shape_key = frame_shape
 
         # Try to reuse a frame from the pool with matching shape
         for _ in range(len(self._frame_pool)):
@@ -422,6 +412,8 @@ class RobotBrain:
         health_results = health.run_all(config)
         if not health_results.get("ollama", False):
             log.warning("[BRAIN] Ollama unreachable at startup; LLM commands will retry on demand")
+        if not health_results.get("piper", True):
+            log.warning("[BRAIN] Piper unavailable at startup; speech output will be silent")
 
         # ── Open camera ───────────────────────────────────────────────────
         dev = self.device
@@ -618,10 +610,15 @@ class RobotBrain:
                     if self.use_web:
                         try:
                             if display is frame:
+                                # Pooled copy, handed straight back: push_frame
+                                # encodes synchronously and keeps no reference, so
+                                # not returning it left the pool permanently empty
+                                # and the "pooling" allocated on every frame.
                                 display_frame = self._get_pooled_frame_copy(display)
+                                self._web.push_frame(display_frame)
+                                self._return_frame_to_pool(display_frame)
                             else:
-                                display_frame = display
-                            self._web.push_frame(display_frame)
+                                self._web.push_frame(display)
                         except Exception as exc:
                             log.warning("[BRAIN] Web frame push failed: %s", exc)
                             # Continue without web update
@@ -729,14 +726,16 @@ def _parse_args() -> argparse.Namespace:
     p.add_argument("--no-web", action="store_true",
                    help="Disable Flask web server (CV+voice only, no dashboard)")
     p.add_argument("--laptop", action="store_true",
-                   help="Use laptop webcam (device 1) instead of /dev/video2")
-    p.add_argument("--model", default="gemma4-e2b-nothink:latest",
-                   help="Ollama model for VLA mode (default: gemma4-e2b-nothink:latest)")
-    p.add_argument("--sensitivity", type=float, default=0.5,
-                   help="Wake word sensitivity (0.0 to 1.0, default: 0.5)")
-    p.add_argument("--wake-keyword", default="alexa",
-                   choices=["alexa", "hey_jarvis", "hey_mycroft", "hey_marvin"],
-                   help="Wake word keyword (default: alexa)")
+                   help="Force the laptop webcam, ignoring --device")
+    p.add_argument("--model", default=config.OLLAMA_MODEL,
+                   help=f"Ollama model for VLA mode (default: {config.OLLAMA_MODEL})")
+    p.add_argument("--sensitivity", type=float, default=config.WAKE_SENSITIVITY,
+                   help=f"Wake word sensitivity, 0-1 (default: {config.WAKE_SENSITIVITY})")
+    # Only stock openWakeWord models exist; "hey_marvin" was listed here but has
+    # no model file, so choosing it silently fell back to hey_jarvis.
+    p.add_argument("--wake-keyword", default=config.WAKE_KEYWORD,
+                   choices=["hey_jarvis", "alexa", "hey_mycroft"],
+                   help=f"Wake word (default: {config.WAKE_KEYWORD} = say \"Hey Jarvis\")")
     p.add_argument("--stt-threshold", type=int, default=850,
                    help="Speech energy threshold (default: 850)")
     p.add_argument("--no-wake-word", action="store_true",
@@ -752,7 +751,7 @@ def main() -> None:
     device_real = CAMERA_ALIAS_RESOLVE.get(device_arg, device_arg)
 
     brain = RobotBrain(
-        device="1" if args.laptop else device_real,
+        device=CAMERA_ALIAS_RESOLVE["laptop"] if args.laptop else device_real,
         esp_host=args.host,
         esp_port=args.port,
         web_port=args.web_port,

@@ -6,11 +6,23 @@ from backend.esp32.robot_comms import RobotComms
 
 
 def _bare_comms():
-    """Create a RobotComms instance without binding a server socket."""
+    """Create a RobotComms instance without binding a server socket.
+
+    Mirrors every attribute ``RobotComms.__init__`` sets, so error paths that
+    touch the reconnect supervision state (``_stop_event``, ``_reconnect_lock``)
+    behave exactly as they do on a real instance.
+    """
     comms = RobotComms.__new__(RobotComms)
+    comms.host = "127.0.0.1"
+    comms.port = 9999
+    comms._server = None
     comms._client = None
-    comms._last_cmd = None
-    comms._lock = threading.Lock()
+    comms._last_cmd = ""
+    comms._last_sent_at = 0.0
+    comms._stop_event = threading.Event()
+    comms._reconnect_thread = None
+    comms._reconnect_attempt = 0
+    comms._reconnect_lock = threading.Lock()
     return comms
 
 
@@ -61,14 +73,18 @@ def test_connected_true_when_client_set():
 
 @pytest.mark.unit
 def test_send_returns_false_on_socket_error():
-    """send() returns False and clears client on socket error."""
+    """send() returns False, clears client and schedules a reconnect."""
     mock_sock = MagicMock()
     mock_sock.sendall.side_effect = OSError("broken pipe")
 
     comms = _bare_comms()
     comms._client = mock_sock
 
-    with patch("select.select", return_value=([], [mock_sock], [])):
+    # Stubbed so the failure path does not spawn a real thread that binds a port.
+    with patch("select.select", return_value=([], [mock_sock], [])), \
+         patch.object(RobotComms, "_schedule_reconnect") as sched:
         result = comms.send("F")
 
     assert result is False
+    assert comms._client is None
+    sched.assert_called_once()

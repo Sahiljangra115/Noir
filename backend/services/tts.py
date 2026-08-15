@@ -171,23 +171,22 @@ class PiperTTS:
         finally:
             self._speak_lock.release()
 
+    # v4l2loopback sinks that scrcpy writes the phone camera into. If the frame
+    # source is the phone, the phone is the natural speaker too.
+    _PHONE_CAMERA_DEVICES = ("/dev/video2", "/dev/video4")
+
     def _should_use_phone_audio(self) -> bool:
-        """Determine if we should use phone audio based on camera device."""
-        if self._robot_state is None:
+        """True only when the phone is both the camera source and able to play.
+
+        Requires a registered wav callback: without one there is nothing to hand
+        the audio to, and returning True would route speech into a void and leave
+        the robot mute.
+        """
+        if self._robot_state is None or self._wav_callback is None:
             return False
 
-        camera_device = self._robot_state.camera_device
-
-        # Phone camera devices (from scrcpy)
-        phone_camera_devices = ["/dev/video2", "/dev/video2", "/dev/video4"]
-
-        # Check if current camera is a phone camera device
-        is_phone_camera = camera_device in phone_camera_devices
-
-        # Also need phone to be connected for WebSocket callback
-        phone_connected = self._robot_state.phone_connected
-
-        return is_phone_camera and phone_connected
+        is_phone_camera = self._robot_state.camera_device in self._PHONE_CAMERA_DEVICES
+        return is_phone_camera and self._robot_state.phone_connected
 
     def _play_on_laptop(self, wav_bytes: bytes) -> None:
         """Play audio on laptop speaker via aplay."""

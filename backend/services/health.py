@@ -65,11 +65,17 @@ def check_camera(device) -> bool:
         cap.release()
 
 
-def run_all(cfg) -> dict[str, bool]:
-    """Run all checks and return a mapping. Caller decides on abort vs degrade."""
+def run_all(cfg, camera_device=None) -> dict[str, bool]:
+    """Run all checks and return a mapping. Caller decides on abort vs degrade.
+
+    ``camera_device`` is optional: pass it to include the camera probe. Omit it
+    when the caller opens the camera itself and does not want it opened twice.
+    """
     results = {
         "ollama": check_ollama(cfg.OLLAMA_URL),
         "piper": check_piper(cfg.PIPER_BIN) if cfg.VOICE_ENABLED else True,
     }
+    if camera_device is not None:
+        results["camera"] = check_camera(camera_device)
     log.info("[HEALTH] checks: %s", results)
     return results

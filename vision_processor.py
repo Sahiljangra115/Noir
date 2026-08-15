@@ -33,7 +33,9 @@ _JPEG_QUALITY  = 65
 _FRAME_RESIZE_MAX = 640
 
 # ── Thresholds ────────────────────────────────────────────────────────────────
-_DIFF_THRESHOLD = 15.0              # MSE threshold for "significant change"
+# Mean absolute difference, in 8-bit grey levels, between consecutive
+# downsampled frames. ~15 levels of average change reads as "the scene moved".
+_DIFF_THRESHOLD = 15.0
 
 def _build_prompt(state: dict | None) -> str:
     mode     = (state or {}).get("mode", "VLA")
@@ -98,7 +100,7 @@ class GemmaVLAProcessor:
     def has_significant_change(self, frame: np.ndarray) -> bool:
         """
         Detects if the frame has changed enough to warrant a new LLM analysis.
-        Uses a fast MSE comparison on downsampled grayscale images.
+        Mean absolute difference of downsampled greyscale frames.
         """
         if self._last_analyzed_frame is None:
             return True
@@ -108,12 +110,11 @@ class GemmaVLAProcessor:
             curr_small = cv2.cvtColor(cv2.resize(frame, (64, 64)), cv2.COLOR_BGR2GRAY)
             last_small = cv2.cvtColor(cv2.resize(self._last_analyzed_frame, (64, 64)), cv2.COLOR_BGR2GRAY)
             
-            # 2. Calculate Mean Squared Error (MSE)
+            # 2. Mean absolute difference (cheaper than MSE, same decision here)
             diff = cv2.absdiff(curr_small, last_small)
-            mse = np.mean(diff)
-            
-            # log.debug("[VLA] Frame diff MSE: %.2f", mse)
-            return mse > _DIFF_THRESHOLD
+            mad = float(np.mean(diff))
+
+            return mad > _DIFF_THRESHOLD
             
         except Exception as exc:
             log.warning("[VLA] Change detection failed: %s", exc)
@@ -183,19 +184,4 @@ class GemmaVLAProcessor:
     def _encode_frame(frame: np.ndarray) -> Optional[str]:
         ok, buf = cv2.imencode(".jpg", frame, [cv2.IMWRITE_JPEG_QUALITY, _JPEG_QUALITY])
         return base64.b64encode(buf).decode("utf-8") if ok else None
-
-# ── Legacy VLA (Commented Out) ────────────────────────────────────────────────
-"""
-_VALID_INTENTS = frozenset({"FOLLOW", "SEARCH", "STOP", "AVOID"})
-
-class VLAProcessor:
-    def __init__(self, ollama_url: str = _OLLAMA_URL, model: str = "moondream") -> None:
-        self.url = ollama_url
-        self.model = model
-        self._session = requests.Session()
-
-    def get_intent(self, frame: np.ndarray) -> str:
-        # ... logic for single-word navigation ...
-        return "STOP"
-"""
 

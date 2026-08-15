@@ -1,4 +1,8 @@
+import 'dart:io';
+
 import 'package:flutter/foundation.dart';
+import 'package:just_audio/just_audio.dart';
+import 'package:path_provider/path_provider.dart';
 import 'package:socket_io_client/socket_io_client.dart' as IO;
 import '../config/app_config.dart';
 import '../models/robot_state.dart';
@@ -8,7 +12,14 @@ class SocketService extends ChangeNotifier {
   RobotState _state = RobotState.initial();
   bool _isConnected = false;
   String? _connectionError;
-  
+
+  // Plays the WAV blobs Piper renders on the laptop. The backend routes speech
+  // here whenever the phone is the camera source, so without a player the robot
+  // simply went silent during any phone-camera session.
+  final AudioPlayer _ttsPlayer = AudioPlayer();
+  int _ttsSeq = 0;
+  bool _ttsBusy = false;
+
   String _host = AppConfig.defaultHost;
   String _token = '';
 
@@ -73,7 +84,36 @@ class SocketService extends ChangeNotifier {
       }
     });
 
-    // Audio playback callback would go here (Task 4)
+    _socket?.on(AppConfig.evTtsAudio, (data) {
+      if (data is List<int>) {
+        _playTts(Uint8List.fromList(data));
+      } else if (data is Uint8List) {
+        _playTts(data);
+      }
+    });
+  }
+
+  /// Write the WAV bytes to a temp file and play them.
+  ///
+  /// just_audio needs a URI, not a byte buffer, so the blob has to land on disk
+  /// first. Utterances are dropped rather than queued while one is playing:
+  /// speech that arrives late is worse than speech that never arrives.
+  Future<void> _playTts(Uint8List wavBytes) async {
+    if (_ttsBusy || wavBytes.isEmpty) return;
+    _ttsBusy = true;
+    try {
+      final dir = await getTemporaryDirectory();
+      final file = File('${dir.path}/jarvis_tts_${_ttsSeq++ % 4}.wav');
+      await file.writeAsBytes(wavBytes, flush: true);
+      await _ttsPlayer.setFilePath(file.path);
+      await _ttsPlayer.play();
+      await _ttsPlayer.processingStateStream
+          .firstWhere((s) => s == ProcessingState.completed);
+    } catch (e) {
+      debugPrint('TTS playback failed: $e');
+    } finally {
+      _ttsBusy = false;
+    }
   }
 
   void sendAudio(Uint8List data) {
@@ -111,6 +151,7 @@ class SocketService extends ChangeNotifier {
   @override
   void dispose() {
     _socket?.dispose();
+    _ttsPlayer.dispose();
     super.dispose();
   }
 }

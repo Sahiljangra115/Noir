@@ -105,7 +105,10 @@ class TestVoicePipelineE2E:
         mocks['stt'].listen.assert_called_once()
         mocks['llm'].parse.assert_called_once()
         mocks['tts'].speak.assert_called()
-        mocks['cmd_queue'].push_all.assert_called_with([{"type": "move", "cmd": "F", "duration": 1.0}])
+        # push_all also receives a corr_id kwarg; only the actions list is asserted.
+        mocks['cmd_queue'].push_all.assert_called_once()
+        pushed_actions = mocks['cmd_queue'].push_all.call_args.args[0]
+        assert pushed_actions == [{"type": "move", "cmd": "F", "duration": 1.0}]
 
         # Verify state was updated
         assert state.last_heard == "move forward"

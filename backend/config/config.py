@@ -103,7 +103,10 @@ JARVIS_SECRET_KEY = _env_str("JARVIS_SECRET_KEY", default="")
 
 OLLAMA_URL = _env_str("JARVIS_OLLAMA_URL", default="http://localhost:11434")
 OLLAMA_MODEL = _env_str("JARVIS_OLLAMA_MODEL", default="gemma4-e2b-nothink:latest")
-OLLAMA_TIMEOUT_S = _env_float("JARVIS_OLLAMA_TIMEOUT_S", 5.0)
+# A cold Ollama load costs 20-40 s on first call and structured generation adds
+# more. The old 5 s default timed out nearly every first voice command and the
+# user heard "Sorry, I timed out" instead of an answer.
+OLLAMA_TIMEOUT_S = _env_float("JARVIS_OLLAMA_TIMEOUT_S", 30.0)
 OLLAMA_MAX_RETRIES = _env_int("JARVIS_OLLAMA_MAX_RETRIES", 1)
 OLLAMA_BACKOFF_BASE = _env_float("JARVIS_OLLAMA_BACKOFF_BASE", 1.5)
 
@@ -118,7 +121,12 @@ PIPER_MODEL = _env_str("JARVIS_PIPER_MODEL", default="")
 PIPER_CONFIG = _env_str("JARVIS_PIPER_CONFIG", default="")
 
 WHISPER_MODEL = _env_str("JARVIS_WHISPER_MODEL", "small.en")
-WHISPER_DEVICE = _env_str("JARVIS_WHISPER_DEVICE", "cpu")
+WHISPER_DEVICE = _env_str("JARVIS_WHISPER_DEVICE", "auto")
+
+# Wake word. Must be a key of wake_word._KEYWORD_TO_MODEL_FILE — openWakeWord
+# ships a fixed set of stock models and "noir"/"jarvis" is not trainable here.
+WAKE_KEYWORD = _env_str("JARVIS_WAKE_KEYWORD", "hey_jarvis")
+WAKE_SENSITIVITY = _env_float("JARVIS_WAKE_SENSITIVITY", 0.5)
 
 
 # ── ESP32 ────────────────────────────────────────────────────────────────────
@@ -153,12 +161,6 @@ LOG_MAX_BYTES = _env_int("JARVIS_LOG_MAX_BYTES", 10 * 1024 * 1024)
 LOG_BACKUPS = _env_int("JARVIS_LOG_BACKUPS", 5)
 
 
-# ── Deprecated ───────────────────────────────────────────────────────────────
-
-# DEPRECATED: not consumed by any active code path; retained for backward compat.
-DEFAULT_API_PARAMS = {"model": "gpt-3.5-turbo"}
-
-
 # ── Validation + summary ─────────────────────────────────────────────────────
 
 def _mask(secret: str) -> str:
@@ -185,6 +187,8 @@ def summary() -> dict:
         "piper_config": PIPER_CONFIG or "<unset>",
         "whisper_model": WHISPER_MODEL,
         "whisper_device": WHISPER_DEVICE,
+        "wake_keyword": WAKE_KEYWORD,
+        "wake_sensitivity": WAKE_SENSITIVITY,
         "esp32_host": ESP32_HOST,
         "esp32_port": ESP32_PORT,
         "cmd_queue_max": CMD_QUEUE_MAX,
@@ -221,6 +225,16 @@ def validate_config() -> None:
                 raise ConfigError(f"VOICE_ENABLED=1 but {label} is unset")
             if not Path(raw).expanduser().exists():
                 raise ConfigError(f"{label} does not exist: {raw}")
+
+    if WAKE_KEYWORD:
+        from backend.services.wake_word import _KEYWORD_TO_MODEL_FILE
+        if WAKE_KEYWORD not in _KEYWORD_TO_MODEL_FILE:
+            raise ConfigError(
+                f"JARVIS_WAKE_KEYWORD={WAKE_KEYWORD!r} has no openWakeWord model. "
+                f"Choose one of: {sorted(_KEYWORD_TO_MODEL_FILE)}"
+            )
+    if not 0.0 < WAKE_SENSITIVITY <= 1.0:
+        raise ConfigError(f"JARVIS_WAKE_SENSITIVITY must be in (0, 1] ({WAKE_SENSITIVITY})")
 
     if OLLAMA_MAX_RETRIES < 0:
         raise ConfigError(f"JARVIS_OLLAMA_MAX_RETRIES must be >= 0 ({OLLAMA_MAX_RETRIES})")

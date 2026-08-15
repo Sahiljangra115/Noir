@@ -5,13 +5,13 @@ Top-level orchestrator for the STT → LLM → TTS + Actions pipeline.
 
 Flow on each activation
 ────────────────────────
-1. WakeWordDetector blocks until "jarvis" is heard (Porcupine)
-   OR force_listen event is set (Flutter app arc reactor tap)
-2. PiperTTS plays a short listening cue (blocking, so mic stays clean)
-3. WhisperSTT records — from phone queue if connected, else laptop mic
-4. CUSTOM_RESPONSES checked first — instant reply for known phrases
+1. WakeWordDetector blocks until the wake word is heard (openWakeWord) OR the
+   force_listen event is set (Flutter arc reactor tap / laptop spacebar)
+2. WhisperSTT records — from the phone queue if connected, else the laptop mic
+3. CUSTOM_RESPONSES checked first — instant reply for known phrases
+4. "bye" ends the exchange
 5. Emergency keyword check → immediate STOP if detected
-6. Visual context (YOLO info) injected into LLM prompt
+6. Visual context (YOLO info) injected into the LLM prompt
 7. LLMParser sends to Gemma 4 → receives {speech, actions}
 8. PiperTTS speaks the reply (non-blocking, also sent to phone via callback)
 9. CommandQueue receives the action list
@@ -39,10 +39,9 @@ from .logging_setup  import set_corr_id
 from .stt            import WhisperSTT
 from .tts            import PiperTTS
 from .wake_word      import WakeWordDetector
+from backend.config  import config
 
 log = logging.getLogger(__name__)
-
-_DEFAULT_WAKEWORD = "alexa"
 
 # Pre-compile regex patterns for efficiency
 CUSTOM_RESPONSES_COMPILED = [
@@ -79,13 +78,22 @@ class VoicePipeline:
         self,
         comms,
         state,
-        wakeword:      str = _DEFAULT_WAKEWORD,
-        wake_sensitivity: float = 0.5,
-        whisper_model: str = "tiny",
-        llm_model:     str = "gemma4-e2b-nothink:latest",
+        wakeword:      str | None = None,
+        wake_sensitivity: float | None = None,
+        whisper_model: str | None = None,
+        llm_model:     str | None = None,
         stt_threshold: int = 850,
         enable_wake_word: bool = True,
     ) -> None:
+        # Defaults come from config so JARVIS_WHISPER_MODEL / _WAKE_KEYWORD /
+        # _OLLAMA_MODEL actually take effect. They used to be literals here,
+        # which pinned Whisper to "tiny" no matter what the env said.
+        wakeword = wakeword or config.WAKE_KEYWORD
+        wake_sensitivity = (
+            config.WAKE_SENSITIVITY if wake_sensitivity is None else wake_sensitivity
+        )
+        whisper_model = whisper_model or config.WHISPER_MODEL
+        llm_model = llm_model or config.OLLAMA_MODEL
 
         self._state  = state
         self._thread = None
@@ -94,7 +102,11 @@ class VoicePipeline:
 
         self._enable_wake_word = enable_wake_word
         self.wakeword  = WakeWordDetector(keyword=wakeword, sensitivity=wake_sensitivity)
-        self.stt       = WhisperSTT(model_size=whisper_model, device="auto", energy_threshold=stt_threshold)
+        self.stt       = WhisperSTT(
+            model_size=whisper_model,
+            device=config.WHISPER_DEVICE,
+            energy_threshold=stt_threshold,
+        )
         self.tts       = PiperTTS()
         self.llm       = LLMParser(model=llm_model)
         self.cmd_queue = CommandQueue(comms=comms, robot_state=state)
@@ -163,7 +175,8 @@ class VoicePipeline:
         self.conversation_active = False
         if self._enable_wake_word:
             self.tts.speak(
-                f"Hey, I'm jarvis. Say '{self.wakeword.keyword}' to wake me.", block=True
+                f"Hey, I'm jarvis. Say {self.wakeword.spoken_name} to wake me.",
+                block=True,
             )
         else:
             self.tts.speak(
@@ -183,9 +196,8 @@ class VoicePipeline:
                         self._force_listen.clear()
                         continue
                     elif not self._enable_wake_word:
-                        # Wake-word logic intentionally commented out for temporary
-                        # push-to-talk testing mode (requested no access key).
-                        # self.wakeword.wait_for_wakeword()
+                        # Push-to-talk mode: nothing to listen for until the
+                        # spacebar or the app tap sets force_listen.
                         self._force_listen.wait(timeout=0.05)
                         continue
                     else:
@@ -201,11 +213,14 @@ class VoicePipeline:
                                 if not detected:
                                     continue
                             else:
-                                # No phone yet — poll briefly, retry. Avoids blocking on
-                                # laptop mic before phone connects.
-                                if self._force_listen.wait(timeout=0.2):
+                                # No phone: listen on the laptop mic. This branch
+                                # used to just poll and continue, so a laptop-only
+                                # run never reacted to the wake word at all.
+                                detected = self.wakeword.wait_for_wakeword(
+                                    stop_event=self._force_listen
+                                )
+                                if not detected:
                                     continue
-                                continue
                         except Exception as e:
                             log.error("[PIPELINE] Wake word failed, disabling: %s", e)
                             self._enable_wake_word = False
@@ -247,16 +262,20 @@ class VoicePipeline:
                 self.tts.speak("I didn't catch that — try again.")
             return
 
-        # Handle Mock objects during testing
-        from unittest.mock import Mock
-        if isinstance(text, Mock):
-            text = str(text.return_value) if hasattr(text, 'return_value') else ""
+        # Trust boundary: the STT backend is swappable and only promised to
+        # return text. Coerce rather than letting a non-str crash the cycle.
+        if not isinstance(text, str):
+            log.warning("[PIPELINE] STT returned %s, not str; ignoring", type(text).__name__)
+            return
 
         text_lower = text.lower()
         # End conversation if user says bye
         if any(word in text_lower for word in ["bye", "goodbye"]):
             self.conversation_active = False
-            self.tts.speak("Goodbye! Say 'Jarvis' to wake me again.", block=False)
+            self.tts.speak(
+                f"Goodbye. Say {self.wakeword.spoken_name} to wake me again.",
+                block=False,
+            )
             return
 
         # ── 3. Custom responses ───────────────────────────────────────────────

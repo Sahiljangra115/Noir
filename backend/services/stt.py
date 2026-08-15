@@ -30,6 +30,12 @@ _ENERGY_THRESHOLD = 800    # slightly more sensitive
 _SILENCE_TIMEOUT   = 0.2    # s - extra aggressive, fastest possible silence
 _NO_SPEECH_TIMEOUT = 2.0    # s - much shorter wait for no speech
 
+# Poll interval when reading the phone audio queue. Timeouts on the queue path
+# are measured in wall-clock seconds rather than chunk counts: an empty poll
+# spends this long, not the 32 ms a real chunk represents, so counting polls as
+# chunks stretched every timeout by ~3x (silence) and ~3x (no-speech).
+_QUEUE_POLL_S = 0.1
+
 
 class WhisperSTT:
     def __init__(
@@ -205,14 +211,16 @@ class WhisperSTT:
         if drained:
             log.info("[STT] Drained %d stale chunks before listening", drained)
 
-        max_chunks         = int(max_duration      * _SAMPLE_RATE / _CHUNK)
-        silence_chunks_max = int(silence_timeout   * _SAMPLE_RATE / _CHUNK)
-        no_speech_max      = int(no_speech_timeout * _SAMPLE_RATE / _CHUNK)
+        # Timeouts here are tracked in seconds, not chunk counts, because an
+        # empty poll and a real chunk cover very different amounts of time.
+        silence_budget_s = silence_timeout
+        no_speech_budget_s = no_speech_timeout
 
         frames:           list = []
         speech_detected:  bool = False
-        silence_chunks:   int  = 0
-        no_speech_chunks: int  = 0
+        silence_s:        float = 0.0
+        no_speech_s:      float = 0.0
+        elapsed_s:        float = 0.0
 
         # Pre-roll buffer for phone queue
         pre_roll:         list = []
@@ -222,7 +230,7 @@ class WhisperSTT:
         print("[STT] Listening (phone)…", end=" ", flush=True)
         rms_log = []
 
-        for _ in range(max_chunks):
+        while elapsed_s < max_duration:
             # PTT support: Stop instantly if space bar is released
             if ptt_callback and not ptt_callback():
                 if speech_detected:
@@ -233,16 +241,17 @@ class WhisperSTT:
                     return ""
 
             try:
-                raw: bytes = audio_queue.get(timeout=0.1)
+                raw: bytes = audio_queue.get(timeout=_QUEUE_POLL_S)
             except queue.Empty:
+                elapsed_s += _QUEUE_POLL_S
                 if speech_detected:
-                    silence_chunks += 1
-                    if silence_chunks >= silence_chunks_max:
+                    silence_s += _QUEUE_POLL_S
+                    if silence_s >= silence_budget_s:
                         print("[done]")
                         break
                 else:
-                    no_speech_chunks += 1
-                    if no_speech_chunks >= no_speech_max:
+                    no_speech_s += _QUEUE_POLL_S
+                    if no_speech_s >= no_speech_budget_s:
                         print("[no speech detected]")
                         return ""
                 continue
@@ -252,6 +261,8 @@ class WhisperSTT:
             if len(raw) % 2:
                 raw = raw[:-1]
             chunk = np.frombuffer(raw, dtype=np.int16).reshape(-1, 1)
+            # Phone chunks are variable-size, so charge the real duration.
+            elapsed_s += chunk.shape[0] / _SAMPLE_RATE
             rms = float(np.sqrt(np.mean(chunk.astype(np.float32) ** 2)))
             rms_log.append(rms)
 
@@ -266,8 +277,8 @@ class WhisperSTT:
                     print("◉", end=" ", flush=True)
                     log.info("[STT] Speech detected rms=%.0f thresh=%d", rms, phone_threshold)
                 else:
-                    no_speech_chunks += 1
-                    if no_speech_chunks >= no_speech_max:
+                    no_speech_s += chunk.shape[0] / _SAMPLE_RATE
+                    if no_speech_s >= no_speech_budget_s:
                         print("[no speech detected]")
                         if rms_log:
                             log.info("[STT] no-speech: chunks=%d rms min=%.0f max=%.0f mean=%.0f thresh=%d",
@@ -277,12 +288,12 @@ class WhisperSTT:
             else:
                 frames.append(chunk.copy())
                 if rms < phone_threshold:
-                    silence_chunks += 1
-                    if silence_chunks >= silence_chunks_max:
+                    silence_s += chunk.shape[0] / _SAMPLE_RATE
+                    if silence_s >= silence_budget_s:
                         print("[done]")
                         break
                 else:
-                    silence_chunks = 0
+                    silence_s = 0.0
 
         if not speech_detected or not frames:
             return ""

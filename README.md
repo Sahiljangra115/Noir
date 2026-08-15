@@ -25,11 +25,11 @@ All language model output is validated before any motor moves, and every network
 
 ## Features
 
-- **Voice pipeline.** openWakeWord wake word ("Hey Jarvis"), Faster-Whisper speech-to-text on CUDA, Gemma 4 reasoning through Ollama, and Piper text-to-speech.
-- **Vision and navigation.** YOLOv8 person tracking, a hybrid ML and OpenCV line follower, and a vision-language-action mode built on Gemma 4 vision.
-- **Mobile control.** A Flutter app with live telemetry, manual drive controls, and an MJPEG camera view.
-- **Resilient runtime.** A thread supervisor restarts crashed workers, the ESP32 link auto-reconnects, and a health check reports system state.
-- **Validated commands.** Model output is checked against a Pydantic schema and an allow-list before it ever reaches the hardware.
+- **Voice pipeline.** openWakeWord wake word, Faster-Whisper speech-to-text, Gemma 4 reasoning through Ollama, and Piper text-to-speech. Wake word works on the laptop mic or on phone audio streamed over the socket; a spacebar or in-app tap acts as push-to-talk.
+- **Vision and navigation.** YOLOv8 person tracking, a line follower that prefers a fine-tuned MobileNetV2 classifier and falls back to an OpenCV scanner when the weights are absent, and a vision-language-action mode built on Gemma 4 vision.
+- **Mobile control.** A Flutter app with live telemetry, manual drive controls, an MJPEG camera view, and playback of the robot's speech through the phone speaker.
+- **Resilient runtime.** A thread supervisor restarts crashed workers, the ESP32 link auto-reconnects, a firmware failsafe cuts the motors if the brain goes quiet, and a health check reports system state.
+- **Validated commands.** Model output and REST input are both checked against the same Pydantic schema and a socket-level allow-list before anything reaches the hardware.
 
 ---
 
@@ -45,7 +45,7 @@ Three concurrent loops share a single thread-safe `RobotState`.
                                                                   +-----------------+
    wake word -> STT -> LLM -> TTS  (Voice Pipeline) ------------> |   RobotComms    |
                                                                   |  TCP : 9999     | --> ESP32 motors
-   Flutter app <--- state every 300ms ---  Web Bridge  <--------> +-----------------+
+   Flutter app <--- state every 300 ms ---  Web Bridge  <-------> +-----------------+
                   ---> control commands --- Flask-SocketIO : 5000
 ```
 
@@ -105,10 +105,29 @@ uv sync                       # create the venv and install from uv.lock
 Create a `.env` file in the project root. It is git-ignored and must never be committed.
 
 ```env
+# Required. Shared by the REST Bearer header and the SocketIO handshake.
 JARVIS_SECRET_KEY=your_secure_token
+
+# Voice. Set JARVIS_VOICE=0 to skip Piper validation entirely.
+JARVIS_PIPER_BIN=/path/to/piper
+JARVIS_PIPER_MODEL=/path/to/en_US-amy-medium.onnx
+JARVIS_PIPER_CONFIG=/path/to/en_US-amy-medium.onnx.json
+
+# Optional, shown with their defaults.
+JARVIS_WAKE_KEYWORD=hey_jarvis      # hey_jarvis | alexa | hey_mycroft
+JARVIS_WAKE_SENSITIVITY=0.5
+JARVIS_WHISPER_MODEL=small.en
+JARVIS_WHISPER_DEVICE=auto          # auto falls back to CPU without CUDA
+JARVIS_OLLAMA_MODEL=gemma4-e2b-nothink:latest
+JARVIS_OLLAMA_TIMEOUT_S=30          # a cold model load costs 20-40 s
+JARVIS_MOVE_MAX_DURATION_S=5        # ceiling on any single timed move
+JARVIS_LINE_MODEL=~/Developer/Model_finetune/line_classifier.pth
 ```
 
-The config layer validates these on startup. A missing secret key returns `503` rather than running unprotected.
+`config.validate_config()` runs at startup and raises before any thread spawns,
+so a bad value fails fast instead of surfacing deep inside a service. A missing
+secret key makes the web server refuse to start and every REST route answer
+`503` rather than running unprotected.
 
 ### 3. Run the backend
 
@@ -119,7 +138,14 @@ uv run python -m backend.main
 uv run python -m backend.main --no-socket --no-web --laptop
 ```
 
-NOIR then listens for the wake word "Noir". Use `--no-wake-word` for push-to-talk during development.
+NOIR then listens for the wake word. openWakeWord ships a fixed set of stock
+models, so the phrase is one of **"Hey Jarvis"** (default), "Alexa", or
+"Hey Mycroft" — pick it with `--wake-keyword hey_jarvis|alexa|hey_mycroft` or
+`JARVIS_WAKE_KEYWORD`. A custom phrase such as "Noir" would require training a
+new openWakeWord model and is not supported out of the box.
+
+Use `--no-wake-word` for push-to-talk during development: hold **space** in the
+Robot Brain window, or tap the arc reactor in the app.
 
 ### 4. Mobile app
 
@@ -132,24 +158,31 @@ flutter build apk --debug
 
 ### 5. ESP32 firmware
 
-Flash the controller in `backend/esp32` with ESP-IDF v6:
+Wi-Fi credentials and the brain's IP live in `backend/esp32/main/secrets.h`,
+which is git-ignored. Create it from the template first:
 
 ```bash
 cd backend/esp32
+cp main/secrets.h.example main/secrets.h   # then edit SSID, password, SERVER_IP
 idf.py set-target esp32
 idf.py flash monitor
 ```
 
-The board joins your Wi-Fi and listens for single-character commands (`F B L R S`) on TCP port 9999.
+The board joins your Wi-Fi, connects out to the laptop on TCP port 9999, and
+executes single-character commands (`F B L R S`). If no command arrives for
+2 seconds it cuts the motors, so a crashed or disconnected brain cannot leave
+the robot driving. The brain re-sends its current command every 0.5 s to keep
+that failsafe satisfied during continuous driving.
 
 ---
 
 ## Security
 
-- Secrets live in `.env` and are never committed or hard-coded.
-- REST requests authenticate with `Authorization: Bearer <token>`, compared using `hmac.compare_digest`. A missing server key returns `503` instead of bypassing the check.
+- Secrets live in `.env` (backend) and `backend/esp32/main/secrets.h` (firmware). Both are git-ignored; neither is hard-coded.
+- REST requests authenticate with `Authorization: Bearer <token>`, compared in constant time. A missing server key returns `503` instead of bypassing the check.
 - SocketIO connections require a `token` at handshake time, through the query string or the auth dictionary.
-- Language model output passes through a Pydantic `LLMResponse` before execution. Commands are allow-listed to `{F, B, L, R, S}` with a duration in `[0.1, 30.0]` seconds.
+- Model output and REST input are validated against the same Pydantic discriminated union. Only two action types exist (`move`, `mode`); movement is allow-listed to `{F, B, L, R, S}` and durations are clamped to `[0.1, JARVIS_MOVE_MAX_DURATION_S]` (5 s by default) in both the schema and the executor.
+- `RobotComms` re-checks the allow-list at the socket boundary, so nothing outside `{F, B, L, R, S}` can reach the firmware.
 - `RobotState` is guarded by an `RLock` and returns deep copies, so callers never hold a mutable reference to shared state.
 
 ---
@@ -157,11 +190,14 @@ The board joins your Wi-Fi and listens for single-character commands (`F B L R S
 ## Testing
 
 ```bash
-uv run pytest                 # full suite
-uv run pytest --cov           # with coverage
+uv run pytest                 # full suite, coverage gate at 50%
+cd jarvis_app && flutter test # Flutter widget + contract tests
 ```
 
-The suite covers resilience, unit, integration, and end-to-end paths.
+93 Python tests across unit, integration, end-to-end and resilience suites, at
+55% line coverage. The resilience suite drives real code paths (socket errors,
+queue exhaustion, oversized payloads, thread restarts) rather than asserting on
+constants.
 
 ---
 

@@ -67,8 +67,13 @@ def setup_logging() -> None:
     # ── Console handler (human-readable) ──────────────────────────────────
     console = logging.StreamHandler()
     console.setLevel(level)
+    # corr_id is in the format string so a single voice interaction can be
+    # followed across the STT, LLM, queue and comms lines that belong to it.
     console.setFormatter(
-        logging.Formatter("%(asctime)s %(levelname)-8s [%(name)s] %(message)s")
+        logging.Formatter(
+            "%(asctime)s %(levelname)-8s [%(name)s] %(corr_id)s %(message)s",
+            datefmt="%H:%M:%S",
+        )
     )
     console.addFilter(corr_filter)
     root.addHandler(console)

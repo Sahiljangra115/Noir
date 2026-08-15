@@ -1,0 +1,639 @@
+{
+  "$schema": "https://noir.local/schema/architecture-1.json",
+  "meta": {
+    "name": "NOIR",
+    "codename": "JARVIS",
+    "version": "0.4.0",
+    "kind": "autonomous mobile robot assistant",
+    "generated": "2026-07-22",
+    "source_of_truth": "derived by reading the repository source, not documentation",
+    "repo_root": "/home/ladliju/Developer/Noir",
+    "summary": "Three concurrent pipelines (vision, voice, web bridge) share one thread-safe RobotState on a laptop. All reasoning happens on the laptop; an ESP32 is a dumb actuator that executes single-character motor commands received over TCP. A Flutter app is a remote telemetry and control surface."
+  },
+
+  "layers": [
+    {
+      "id": "perception",
+      "name": "Perception & Vision",
+      "runtime": "Python 3.12 / laptop (CUDA optional)",
+      "purpose": "Turn camera frames into a single-character motor intent."
+    },
+    {
+      "id": "cognition",
+      "name": "Cognition & Voice",
+      "runtime": "Python 3.12 / laptop, one daemon thread",
+      "purpose": "Wake word to speech to intent to validated action tokens."
+    },
+    {
+      "id": "coordination",
+      "name": "Coordination & State",
+      "runtime": "Python 3.12 / laptop, shared memory",
+      "purpose": "Own the mode, serialise actions, supervise threads, survive failure."
+    },
+    {
+      "id": "transport",
+      "name": "Transport & Bridges",
+      "runtime": "Python 3.12 / laptop, TCP :9999 and HTTP/WS :5000",
+      "purpose": "Reach the hardware and the phone. Every boundary is authenticated or allow-listed."
+    },
+    {
+      "id": "clients",
+      "name": "Clients",
+      "runtime": "Flutter (Android/iOS) + embedded browser dashboard",
+      "purpose": "Telemetry, manual drive, camera view, push-to-talk."
+    },
+    {
+      "id": "hardware",
+      "name": "Hardware",
+      "runtime": "ESP32 / ESP-IDF v6 / FreeRTOS",
+      "purpose": "Execute motor commands. No decisions on the board."
+    }
+  ],
+
+  "graph": {
+    "description": "Neuron view of the running system. Nodes are live units of execution or external endpoints; edges are real signal paths carrying frames, command bytes, state snapshots, audio or model traffic.",
+    "layer_colors": {
+      "perception": "#3ddc97",
+      "cognition": "#a78bfa",
+      "coordination": "#00e5ff",
+      "transport": "#ffc857",
+      "clients": "#7dd3fc",
+      "hardware": "#ff5c6c",
+      "external": "#8b95a3"
+    },
+    "edge_kinds": {
+      "frame": "camera frames and encoded video",
+      "command": "single-character motor commands",
+      "state": "RobotState reads and writes",
+      "audio": "PCM16 in, WAV out",
+      "model": "LLM / VLM inference traffic",
+      "network": "control and telemetry messages",
+      "supervise": "thread lifecycle control"
+    },
+    "nodes": [
+      {"id": "camera", "label": "Camera", "layer": "external", "size": 1, "note": "V4L2 device: laptop cam or phone via scrcpy"},
+      {"id": "mic", "label": "Microphone", "layer": "external", "size": 1, "note": "laptop mic, or phone mic streamed over SocketIO"},
+      {"id": "ollama", "label": "Ollama", "layer": "external", "size": 2, "note": "gemma4-e2b-nothink, local HTTP :11434"},
+      {"id": "speaker", "label": "Laptop speaker", "layer": "external", "size": 1, "note": "aplay stdin"},
+
+      {"id": "robot_brain", "label": "RobotBrain", "layer": "coordination", "size": 3, "note": "CV loop, 20 fps cap, mode dispatch"},
+      {"id": "robot_state", "label": "RobotState", "layer": "coordination", "size": 3, "note": "RLock + deepcopy, the only shared memory"},
+      {"id": "command_queue", "label": "CommandQueue", "layer": "coordination", "size": 2, "note": "bounded FIFO, drop-oldest, one executor thread"},
+      {"id": "supervisor", "label": "ThreadSupervisor", "layer": "coordination", "size": 2, "note": "restarts dead threads, 10 per 60 s then degraded"},
+      {"id": "config", "label": "Config", "layer": "coordination", "size": 1, "note": "typed env, validated at startup"},
+      {"id": "health", "label": "Health checks", "layer": "coordination", "size": 1, "note": "Ollama, Piper, camera probes"},
+
+      {"id": "human_detector", "label": "YOLOv8n", "layer": "perception", "size": 2, "note": "person detection, class 0 only"},
+      {"id": "line_follower", "label": "MobileNetV2", "layer": "perception", "size": 2, "note": "6-class line steer classifier"},
+      {"id": "vla", "label": "Gemma VLA", "layer": "perception", "size": 2, "note": "change-triggered vision-language-action"},
+      {"id": "geometry", "label": "Geometry", "layer": "perception", "size": 1, "note": "focal, angle, safe-distance policy"},
+
+      {"id": "voice_pipeline", "label": "VoicePipeline", "layer": "cognition", "size": 3, "note": "one daemon thread owning the whole conversation cycle"},
+      {"id": "wake_word", "label": "openWakeWord", "layer": "cognition", "size": 1, "note": "1280-sample frames, peak or smoothed trigger"},
+      {"id": "stt", "label": "Whisper STT", "layer": "cognition", "size": 2, "note": "faster-whisper, CUDA int8, energy VAD"},
+      {"id": "llm_parser", "label": "LLMParser", "layer": "cognition", "size": 2, "note": "prompt, retry with backoff, Pydantic gate"},
+      {"id": "tts", "label": "Piper TTS", "layer": "cognition", "size": 2, "note": "offline ONNX voice, routed to phone or laptop"},
+
+      {"id": "web_server", "label": "WebServer", "layer": "transport", "size": 3, "note": "Flask-SocketIO :5000, bearer auth, rate limited"},
+      {"id": "rest_api", "label": "REST blueprint", "layer": "transport", "size": 1, "note": "/api/robot/*"},
+      {"id": "robot_comms", "label": "RobotComms", "layer": "transport", "size": 3, "note": "TCP server :9999, command allow-list"},
+
+      {"id": "flutter_app", "label": "Flutter app", "layer": "clients", "size": 2, "note": "telemetry, manual drive, MJPEG, push-to-talk"},
+      {"id": "browser_dashboard", "label": "Browser dashboard", "layer": "clients", "size": 1, "note": "zero-dependency fallback UI at /"},
+
+      {"id": "esp32", "label": "ESP32", "layer": "hardware", "size": 2, "note": "ESP-IDF, recv one byte, drive pins, stop on anything odd"},
+      {"id": "motors", "label": "L298N motors", "layer": "hardware", "size": 1, "note": "LEDC PWM 1 kHz 8-bit"}
+    ],
+    "edges": [
+      {"from": "camera", "to": "robot_brain", "kind": "frame", "label": "BGR frame, 20 fps cap"},
+      {"from": "robot_brain", "to": "human_detector", "kind": "frame", "label": "mode HUMAN_TRACK"},
+      {"from": "robot_brain", "to": "line_follower", "kind": "frame", "label": "mode LFR"},
+      {"from": "robot_brain", "to": "vla", "kind": "frame", "label": "mode VLA, only on MSE > 15"},
+      {"from": "human_detector", "to": "geometry", "kind": "frame", "label": "smoothed bbox"},
+      {"from": "geometry", "to": "robot_brain", "kind": "command", "label": "safe-distance command"},
+      {"from": "line_follower", "to": "robot_brain", "kind": "command", "label": "steer to F/L/R/S"},
+      {"from": "vla", "to": "ollama", "kind": "model", "label": "JPEG 640px q65 + state"},
+      {"from": "ollama", "to": "vla", "kind": "model", "label": "{speech, actions}"},
+      {"from": "vla", "to": "robot_brain", "kind": "command", "label": "first move action"},
+      {"from": "vla", "to": "tts", "kind": "audio", "label": "spoken observation"},
+
+      {"from": "robot_brain", "to": "robot_comms", "kind": "command", "label": "one char per iteration"},
+      {"from": "robot_comms", "to": "esp32", "kind": "command", "label": "TCP :9999, 1 ASCII byte"},
+      {"from": "esp32", "to": "motors", "kind": "command", "label": "GPIO + PWM duty"},
+      {"from": "robot_brain", "to": "robot_state", "kind": "state", "label": "mode, last_cmd, yolo_info"},
+      {"from": "robot_brain", "to": "web_server", "kind": "frame", "label": "display frame, encoded only if a client is attached"},
+
+      {"from": "mic", "to": "wake_word", "kind": "audio", "label": "16 kHz PCM16"},
+      {"from": "mic", "to": "stt", "kind": "audio", "label": "16 kHz PCM16"},
+      {"from": "wake_word", "to": "voice_pipeline", "kind": "audio", "label": "wake detected"},
+      {"from": "voice_pipeline", "to": "stt", "kind": "audio", "label": "listen window"},
+      {"from": "stt", "to": "voice_pipeline", "kind": "network", "label": "transcript"},
+      {"from": "robot_state", "to": "voice_pipeline", "kind": "state", "label": "snapshot for vision context"},
+      {"from": "voice_pipeline", "to": "llm_parser", "kind": "model", "label": "text + state snapshot"},
+      {"from": "llm_parser", "to": "ollama", "kind": "model", "label": "format=json, temp 0.1"},
+      {"from": "ollama", "to": "llm_parser", "kind": "model", "label": "raw JSON"},
+      {"from": "llm_parser", "to": "voice_pipeline", "kind": "network", "label": "validated {speech, actions}"},
+      {"from": "voice_pipeline", "to": "tts", "kind": "audio", "label": "reply text"},
+      {"from": "voice_pipeline", "to": "command_queue", "kind": "command", "label": "action tokens + corr id"},
+      {"from": "voice_pipeline", "to": "robot_state", "kind": "state", "label": "last_heard, jarvis_response"},
+      {"from": "command_queue", "to": "robot_comms", "kind": "command", "label": "timed move sequences"},
+      {"from": "command_queue", "to": "robot_state", "kind": "state", "label": "mode, goto_target"},
+      {"from": "tts", "to": "speaker", "kind": "audio", "label": "WAV to aplay"},
+      {"from": "tts", "to": "web_server", "kind": "audio", "label": "WAV callback when phone owns audio"},
+
+      {"from": "web_server", "to": "flutter_app", "kind": "network", "label": "state_update every 100 ms"},
+      {"from": "web_server", "to": "flutter_app", "kind": "audio", "label": "tts_audio WAV"},
+      {"from": "web_server", "to": "flutter_app", "kind": "frame", "label": "MJPEG /frame ~15 fps"},
+      {"from": "flutter_app", "to": "web_server", "kind": "audio", "label": "mic PCM16, 400-deep drop-oldest queue"},
+      {"from": "flutter_app", "to": "web_server", "kind": "network", "label": "IMU, GPS, mode, move, force_listen"},
+      {"from": "browser_dashboard", "to": "web_server", "kind": "network", "label": "bearer REST poll"},
+      {"from": "web_server", "to": "voice_pipeline", "kind": "audio", "label": "audio queue handle"},
+      {"from": "web_server", "to": "robot_state", "kind": "state", "label": "imu, gps, phone_connected"},
+      {"from": "robot_state", "to": "web_server", "kind": "state", "label": "snapshot broadcast"},
+      {"from": "web_server", "to": "robot_comms", "kind": "command", "label": "manual move + auto-stop timer"},
+      {"from": "web_server", "to": "rest_api", "kind": "network", "label": "blueprint registration"},
+      {"from": "rest_api", "to": "command_queue", "kind": "command", "label": "queued action"},
+      {"from": "rest_api", "to": "robot_state", "kind": "state", "label": "snapshot read"},
+
+      {"from": "supervisor", "to": "voice_pipeline", "kind": "supervise", "label": "restart on death"},
+      {"from": "supervisor", "to": "command_queue", "kind": "supervise", "label": "restart on death"},
+      {"from": "supervisor", "to": "web_server", "kind": "supervise", "label": "restart state-pusher"},
+      {"from": "config", "to": "robot_brain", "kind": "supervise", "label": "validated env or hard exit"},
+      {"from": "health", "to": "robot_brain", "kind": "supervise", "label": "probe results, degrade not abort"}
+    ]
+  },
+
+  "components": [
+    {
+      "id": "robot_brain",
+      "name": "RobotBrain",
+      "layer": "coordination",
+      "file": "backend/main.py",
+      "loc": 771,
+      "responsibility": "Owns the CV loop at a 20 fps cap (LOOP_SLEEP_S = 0.05). Reads a frame, dispatches on RobotMode via match/case, emits one command char, sends it to the ESP32, pushes the frame to the web bridge, draws the HUD, handles hotkeys.",
+      "key_symbols": ["RobotBrain.run", "RobotBrain._send", "RobotMode", "_run_lfr", "_run_human", "_run_vla", "_draw_hud"],
+      "concurrency": "main thread",
+      "degradation": [
+        "Camera missing -> CameraUnavailable caught, mode forced to IDLE, voice and manual still work",
+        "Web server start failure -> use_web disabled, loop continues",
+        "Voice pipeline start failure -> logged, loop continues",
+        "10 consecutive frame or loop errors -> clean shutdown with emergency S"
+      ],
+      "notes": "Frame pooling (deque maxlen=3) reuses same-shape numpy buffers instead of reallocating each iteration."
+    },
+    {
+      "id": "robot_state",
+      "name": "RobotState",
+      "layer": "coordination",
+      "file": "backend/services/robot_state.py",
+      "loc": 184,
+      "responsibility": "The single shared mutable object. Every field is a property guarded by one threading.RLock. Dict fields (imu, gps) return copy.deepcopy so no caller ever holds a mutable reference into shared state.",
+      "fields": ["mode", "last_cmd", "goto_target", "yolo_info", "phone_connected", "imu", "gps", "last_heard", "jarvis_response", "camera_device", "ptt_active"],
+      "key_symbols": ["RobotState.snapshot"],
+      "concurrency": "touched by CV loop, voice pipeline, command queue, web bridge, state pusher"
+    },
+    {
+      "id": "command_queue",
+      "name": "CommandQueue",
+      "layer": "coordination",
+      "file": "backend/services/command_queue.py",
+      "loc": 184,
+      "responsibility": "FIFO of validated action tokens drained by one executor thread. Serialises timed moves so two LLM actions never fight for the motors.",
+      "action_types": ["mode", "move", "goto", "arm"],
+      "backpressure": "Bounded at CMD_QUEUE_MAX (128). On overflow it evicts the oldest action, logs a warning, then retries the put. Never blocks a producer.",
+      "notes": "A timed move flips mode to MANUAL for its duration to freeze the CV loop, then restores the previous mode.",
+      "concurrency": "daemon thread 'cmd-queue', restartable via executor_thread_factory"
+    },
+    {
+      "id": "supervisor",
+      "name": "ThreadSupervisor",
+      "layer": "coordination",
+      "file": "backend/services/supervisor.py",
+      "loc": 85,
+      "responsibility": "Polls registered threads every 1 s and restarts any that died. Each registrant supplies a factory returning a fresh Thread.",
+      "policy": "MAX_RESTARTS 10 within a 60 s window, then the thread is marked degraded and left dead rather than crash-looping.",
+      "supervises": ["cmd-queue", "voice-pipeline", "state-pusher"]
+    },
+    {
+      "id": "health",
+      "name": "Startup health checks",
+      "layer": "coordination",
+      "file": "backend/services/health.py",
+      "loc": 75,
+      "responsibility": "Non-raising probes run before the loop starts: Ollama /api/tags reachable, Piper binary present and executable, camera openable. Returns a dict; the caller decides abort vs degrade."
+    },
+    {
+      "id": "config",
+      "name": "Typed config",
+      "layer": "coordination",
+      "file": "backend/config/config.py",
+      "loc": 232,
+      "responsibility": "Single source of truth for every tunable, read from environment via typed helpers. validate_config() raises ConfigError at startup so the process dies early instead of failing deep inside a service. summary() emits a redacted snapshot for diagnostics."
+    },
+
+    {
+      "id": "human_detector",
+      "name": "HumanDetector (YOLOv8n)",
+      "layer": "perception",
+      "file": "tracker.py",
+      "responsibility": "Person detection, COCO class 0 only, conf 0.45 / IoU 0.45. Degrades to disabled if ultralytics is not importable.",
+      "downstream": "EMATracker smooths the bbox (alpha 0.25), then RobotComms.from_human_bbox converts geometry to a command."
+    },
+    {
+      "id": "line_follower",
+      "name": "HybridLineFollower (MobileNetV2)",
+      "layer": "perception",
+      "file": "tracker.py",
+      "responsibility": "Fine-tuned MobileNetV2 classifier over 6 classes (Move Left, Move Right, No Line, Straight, Turn Left, Turn Right) mapped to a steer string. Weights load from a local path, else fall back to a HuggingFace download; if both fail it reports LOST rather than steering blind.",
+      "notes": "The classic OpenCV scanline follower is present but commented out; the live path is ML-only despite the 'Hybrid' name."
+    },
+    {
+      "id": "vla",
+      "name": "GemmaVLAProcessor",
+      "layer": "perception",
+      "file": "vision_processor.py",
+      "loc": 201,
+      "responsibility": "Vision-language-action. Sends a JPEG frame plus state context to Ollama and gets back {speech, actions} validated by the same Pydantic LLMResponse model as the text parser.",
+      "cost_control": [
+        "Only fires when has_significant_change() sees MSE > 15 on 64x64 grayscale downsamples",
+        "Frame capped at 640 px long edge, JPEG quality 65",
+        "keep_alive 30m pins the model in GPU; a warm-up POST runs at construction to avoid the 20-40 s cold load"
+      ],
+      "concurrency": "inference runs on a throwaway daemon thread guarded by a busy flag, so the CV loop never blocks on the model"
+    },
+    {
+      "id": "geometry",
+      "name": "Camera geometry helpers",
+      "layer": "perception",
+      "file": "tracker.py",
+      "responsibility": "compute_focal (cached), pixel_offset_to_angle, estimate_distance from known object height. HFOV 69 degrees.",
+      "distance_policy": "bbox area > 40% of frame -> S (too close), |rotate| > 5 deg -> L/R, area < 15% -> F, else S"
+    },
+
+    {
+      "id": "voice_pipeline",
+      "name": "VoicePipeline",
+      "layer": "cognition",
+      "file": "backend/services/voice_pipeline.py",
+      "loc": 309,
+      "responsibility": "One daemon thread running the whole conversation cycle so the CV loop is never blocked. Wake, transcribe, short-circuit, reason, speak, enqueue.",
+      "cycle": [
+        "0. Mint a 12-char correlation id and bind it to the log context",
+        "1. Wake word on phone audio queue, or a force_listen event from the app tap / spacebar PTT",
+        "2. Transcribe from phone queue if connected, else laptop mic",
+        "3. Regex CUSTOM_RESPONSES fast path - answered locally, no model call",
+        "4. Emergency keyword fast path - clears the queue, forces IDLE, never reaches the LLM",
+        "5. Snapshot RobotState so the model gets vision context",
+        "6. LLMParser -> validated {speech, actions}",
+        "7. TTS speaks non-blocking, actions go to CommandQueue"
+      ],
+      "warmup": "Whisper and Piper load in parallel daemon threads at construction, saving 2-8 s on the first request."
+    },
+    {
+      "id": "wake_word",
+      "name": "WakeWordDetector",
+      "layer": "cognition",
+      "file": "backend/services/wake_word.py",
+      "loc": 179,
+      "engine": "openWakeWord (Apache-2.0, no vendor key)",
+      "responsibility": "16 kHz PCM16 in 1280-sample frames. Triggers on instant peak or a 3-frame smoothed average at 80% of threshold. Works on the laptop mic or on variable-size chunks buffered from the phone queue.",
+      "discrepancy": "README, CLAUDE.md and pyproject still name Porcupine / pvporcupine. The live code is openWakeWord. pvporcupine is a stale dependency."
+    },
+    {
+      "id": "stt",
+      "name": "WhisperSTT",
+      "layer": "cognition",
+      "file": "backend/services/stt.py",
+      "loc": 316,
+      "engine": "faster-whisper, CUDA with int8, automatic CPU fallback",
+      "responsibility": "Energy-gated VAD recording then transcription. Waits up to no_speech_timeout for speech to start, then records until silence_timeout of continuous quiet, hard-capped at max_duration.",
+      "details": [
+        "5-chunk pre-roll buffer so the start of the sentence is not clipped",
+        "Phone threshold is auto-lowered to 40% of the laptop threshold (floor 150) for a different noise floor",
+        "Stale queued audio is drained before listening so a tap-to-talk starts clean",
+        "Silero VAD also runs inside Whisper on the recorded buffer"
+      ]
+    },
+    {
+      "id": "llm_parser",
+      "name": "LLMParser",
+      "layer": "cognition",
+      "file": "backend/services/llm_parser.py",
+      "loc": 243,
+      "model": "gemma4-e2b-nothink:latest via Ollama /api/generate",
+      "responsibility": "Prompt with live state, force JSON output, then validate hard. Nothing unvalidated reaches the queue.",
+      "resilience": "Exponential backoff with jitter on Timeout / ConnectionError / 5xx. Any failure returns a safe {speech, actions: []} fallback so the robot says something and moves nothing.",
+      "parsing": "Strips markdown fences, extracts the outermost JSON object, validates against LLMResponse. On validation failure it salvages only the speech field and drops all actions."
+    },
+    {
+      "id": "tts",
+      "name": "PiperTTS",
+      "layer": "cognition",
+      "file": "backend/services/tts.py",
+      "loc": 217,
+      "engine": "piper-tts, offline ONNX neural voice",
+      "responsibility": "Render WAV in memory, then route it. Phone camera in use and phone connected -> emit over SocketIO to the phone speaker; otherwise pipe to aplay on the laptop, with automatic fallback if the phone path throws.",
+      "concurrency": "non-blocking by default via a daemon thread; a non-blocking lock drops overlapping utterances instead of queueing them. Live subprocesses are tracked in a WeakSet and terminated at shutdown."
+    },
+
+    {
+      "id": "web_server",
+      "name": "WebServer (Flask-SocketIO)",
+      "layer": "transport",
+      "file": "web_server.py",
+      "loc": 606,
+      "bind": "0.0.0.0:5000",
+      "responsibility": "The phone bridge. Authenticated SocketIO handshake, phone mic audio in, sensors in, TTS audio out, state broadcast out, MJPEG stream, REST commands, embedded browser dashboard.",
+      "concurrency": "daemon thread 'web-server' plus a supervised 'state-pusher' thread",
+      "hardening": [
+        "Bearer token on every REST route, compared with hmac.compare_digest",
+        "Missing JARVIS_SECRET_KEY returns 503 and refuses to start the server; it never silently runs open",
+        "SocketIO connect handler returns False on a bad or missing token",
+        "flask-limiter: 5 req/s on /command, 10000/hour default",
+        "CORS reflected only for origins in the ALLOWED_ORIGINS list",
+        "Payload caps: 1 MB body on /command, 512 KB audio frame, 8 KB sensor JSON",
+        "Move duration clamped to [0.1, MOVE_MAX_DURATION_S]; a single shared timer is cancelled and replaced so repeated moves cannot leak threads"
+      ],
+      "efficiency": "Frames are only JPEG-encoded when a browser or app client is actually attached."
+    },
+    {
+      "id": "rest_api",
+      "name": "REST blueprint",
+      "layer": "transport",
+      "file": "backend/api/robot.py",
+      "loc": 78,
+      "responsibility": "Secondary /api/robot/* surface registered onto the Flask app after the server thread comes up (polled up to 5 s). Same Bearer auth, Pydantic-validated body.",
+      "endpoints": ["POST /api/robot/command", "GET /api/robot/state", "POST /api/llm/query (501 not implemented)"]
+    },
+    {
+      "id": "robot_comms",
+      "name": "RobotComms",
+      "layer": "transport",
+      "file": "backend/esp32/robot_comms.py",
+      "loc": 324,
+      "topology": "The laptop is the TCP server on :9999; the ESP32 dials in as a client.",
+      "responsibility": "Single-byte command transport plus the geometry-to-command translation helpers.",
+      "hardening": [
+        "Allow-list at the socket boundary: FBLRS motor plus GOUD arm. Anything else is dropped and logged.",
+        "Always uppercased and truncated to one character before send",
+        "Duplicate commands are suppressed; the board holds its last state"
+      ],
+      "resilience": [
+        "TCP_NODELAY and 50 ms send timeout so the CV loop never stalls on a dead link",
+        "select() before every write; a broken pipe clears the client and schedules reconnect",
+        "Exponential backoff with jitter from ESP32_RECONNECT_BASE_S 1 s to ESP32_RECONNECT_MAX_S 30 s",
+        "Initial connect runs on a background thread so the loop starts with no hardware present"
+      ]
+    },
+
+    {
+      "id": "flutter_app",
+      "name": "Flutter app (jarvis_app)",
+      "layer": "clients",
+      "file": "jarvis_app/lib/",
+      "responsibility": "Four screens (home, control, vision, settings) over a Provider-held SocketService. Streams mic PCM16 up, plays TTS WAV down, publishes IMU and GPS, sends mode and move commands, renders the MJPEG feed.",
+      "packages": ["socket_io_client", "record", "just_audio", "sensors_plus", "geolocator", "shared_preferences", "provider", "flutter_animate", "dynamic_color"],
+      "auth": "Host and token persist in SharedPreferences and are sent both as SocketIO auth payload and query fallback."
+    },
+    {
+      "id": "browser_dashboard",
+      "name": "Embedded browser dashboard",
+      "layer": "clients",
+      "file": "web_server.py (_HTML)",
+      "responsibility": "Zero-dependency fallback UI served at /. Polls /status every second, posts move and mode commands. Reads its bearer token from localStorage."
+    },
+
+    {
+      "id": "esp32",
+      "name": "ESP32 motor controller",
+      "layer": "hardware",
+      "file": "backend/esp32/main/main.c",
+      "loc": 233,
+      "platform": "ESP-IDF v6, FreeRTOS, L298N H-bridge",
+      "responsibility": "Join Wi-Fi, dial the brain on TCP :9999, recv() one byte at a time, drive the pins. It makes no decisions.",
+      "pins": {"ENA": "GPIO25", "IN1": "GPIO26", "IN2": "GPIO27", "ENB": "GPIO13", "IN3": "GPIO14", "IN4": "GPIO12"},
+      "pwm": "LEDC low-speed mode, 1 kHz, 8-bit. SPEED_NORMAL 200, SPEED_TURN 180.",
+      "failsafe": [
+        "Unknown character -> motor_stop()",
+        "Socket disconnect (recv <= 0) -> motor_stop() then reconnect after 500 ms",
+        "Connect failure -> motor_stop() then retry after 1 s",
+        "Wi-Fi disconnect event -> automatic esp_wifi_connect()"
+      ]
+    }
+  ],
+
+  "runtime_threads": [
+    {"name": "main", "owner": "robot_brain", "kind": "main", "role": "CV loop, 20 fps cap, cv2 window and hotkeys"},
+    {"name": "web-server", "owner": "web_server", "kind": "daemon", "role": "Flask-SocketIO serve loop"},
+    {"name": "state-pusher", "owner": "web_server", "kind": "supervised", "role": "emit state_update to the phone on a 100 ms tick while connected"},
+    {"name": "voice-pipeline", "owner": "voice_pipeline", "kind": "supervised", "role": "wake -> STT -> LLM -> TTS -> enqueue"},
+    {"name": "cmd-queue", "owner": "command_queue", "kind": "supervised", "role": "serialise and execute action tokens"},
+    {"name": "supervisor", "owner": "supervisor", "kind": "daemon", "role": "restart dead supervised threads"},
+    {"name": "esp32-initial-connect", "owner": "robot_comms", "kind": "daemon", "role": "first accept() poll so startup is not blocked on hardware"},
+    {"name": "esp32-reconnect", "owner": "robot_comms", "kind": "daemon", "role": "backoff reconnect loop"},
+    {"name": "vla-warmup / vla inference", "owner": "vla", "kind": "daemon", "role": "pin the model, then run each inference off-loop"},
+    {"name": "stt-warmup / tts-warmup", "owner": "voice_pipeline", "kind": "daemon", "role": "parallel model preload at construction"},
+    {"name": "tts speak", "owner": "tts", "kind": "daemon", "role": "synthesis and playback per utterance"},
+    {"name": "move stop timer", "owner": "web_server", "kind": "daemon timer", "role": "auto-stop a timed manual move; cancelled and replaced, never accumulated"}
+  ],
+
+  "modes": [
+    {"id": "IDLE", "command": "S", "description": "Default and safe state. Also the forced state when the camera is unavailable or an emergency keyword is heard.", "hotkey": "0"},
+    {"id": "LFR", "command": "from HybridLineFollower steer", "description": "Line following via the MobileNetV2 classifier.", "hotkey": "1"},
+    {"id": "HUMAN_TRACK", "command": "from bbox geometry", "description": "YOLOv8n person tracking with EMA smoothing and safe-distance logic. Rotates right to search when nobody is visible.", "hotkey": "2"},
+    {"id": "VLA", "command": "first move action from the last VLA response", "description": "Change-triggered vision-language navigation via Gemma 4.", "hotkey": "3"},
+    {"id": "MANUAL", "command": "state.last_cmd passthrough", "description": "CV loop stops deciding; the app, the dashboard or a timed queue move owns the motors.", "hotkey": "4"},
+    {"id": "GOTO", "command": "n/a", "description": "Accepted as an action type and settable via the web bridge, but the CV loop has no GOTO branch. Falls through to the unknown-mode guard and stops.", "status": "declared, not implemented"}
+  ],
+
+  "protocols": {
+    "esp32_tcp": {
+      "transport": "TCP, laptop listens on :9999, ESP32 connects out",
+      "payload": "one ASCII byte per command, no framing, no ack",
+      "commands": {
+        "F": "forward, both motors SPEED_NORMAL",
+        "B": "backward, both motors SPEED_NORMAL",
+        "L": "left, differential at SPEED_TURN",
+        "R": "right, differential at SPEED_TURN",
+        "S": "stop, duty 0 and all direction pins low"
+      },
+      "arm_commands_sent_but_not_implemented_on_board": {"G": "grab", "O": "release", "U": "up", "D": "down"}
+    },
+    "socketio": {
+      "url": "ws://<laptop>:5000",
+      "auth": "token in the handshake auth dict, query param fallback; rejected connections return False",
+      "phone_to_laptop": [
+        {"event": "audio_data", "payload": "binary PCM16 LE 16 kHz mono", "limit": "512 KB per frame, queue 400 deep with drop-oldest"},
+        {"event": "sensor_data", "payload": "{imu:{accel,gyro}, gps:{lat,lon,alt,speed}}", "limit": "8 KB serialised"},
+        {"event": "force_listen", "payload": "empty", "effect": "skip the wake word for one cycle"},
+        {"event": "command", "payload": "{type: mode|move, ...}", "effect": "same handler as REST /command, replies with command_ack"}
+      ],
+      "laptop_to_phone": [
+        {"event": "state_update", "payload": "full RobotState snapshot", "cadence": "100 ms tick while the phone is connected"},
+        {"event": "tts_audio", "payload": "raw WAV bytes for the phone speaker"},
+        {"event": "audio_error / sensor_error / command_ack", "payload": "{reason} or {status}"}
+      ]
+    },
+    "http": [
+      {"method": "GET", "path": "/", "auth": "none", "returns": "embedded dashboard HTML"},
+      {"method": "GET", "path": "/status", "auth": "bearer", "returns": "RobotState snapshot", "rate_limit": "exempt"},
+      {"method": "POST", "path": "/command", "auth": "bearer", "rate_limit": "5/s", "body": "{type: mode|move, ...}"},
+      {"method": "GET", "path": "/frame", "auth": "bearer", "returns": "multipart MJPEG at ~15 fps"},
+      {"method": "POST", "path": "/api/robot/command", "auth": "bearer", "returns": "{status: queued}"},
+      {"method": "GET", "path": "/api/robot/state", "auth": "bearer"},
+      {"method": "POST", "path": "/api/llm/query", "auth": "bearer", "returns": "501"}
+    ]
+  },
+
+  "action_schema": {
+    "validator": "pydantic, discriminated union on 'type', model LLMResponse{speech, actions[]}",
+    "enforcement": "Every model output, text or vision, is validated before it can touch the queue. A validation failure drops all actions and keeps only the speech.",
+    "actions": [
+      {"type": "mode", "fields": {"value": "LFR | HUMAN_TRACK | VLA | GOTO | MANUAL | IDLE"}},
+      {"type": "move", "fields": {"cmd": "F | B | L | R | S", "duration": "float, schema [0.1, 30.0], runtime-clamped to MOVE_MAX_DURATION_S (5.0)"}},
+      {"type": "goto", "fields": {"target": "free string"}},
+      {"type": "arm", "fields": {"cmd": "GRAB | RELEASE | UP | DOWN"}}
+    ]
+  },
+
+  "data_flows": [
+    {"from": "camera", "to": "robot_brain", "via": "V4L2 / OpenCV VideoCapture", "payload": "BGR frame", "rate": "20 fps cap, buffer size 1, MJPG fourcc for low latency"},
+    {"from": "robot_brain", "to": "human_detector", "payload": "frame", "when": "mode HUMAN_TRACK"},
+    {"from": "robot_brain", "to": "line_follower", "payload": "frame", "when": "mode LFR"},
+    {"from": "robot_brain", "to": "vla", "payload": "frame copy on a worker thread", "when": "mode VLA and MSE change > 15"},
+    {"from": "robot_brain", "to": "robot_comms", "payload": "one command char", "rate": "every loop iteration, de-duplicated at the socket"},
+    {"from": "robot_comms", "to": "esp32", "via": "TCP :9999", "payload": "one ASCII byte"},
+    {"from": "robot_brain", "to": "web_server", "payload": "display frame", "note": "encoded only when a client is attached"},
+    {"from": "flutter_app", "to": "web_server", "via": "SocketIO", "payload": "mic PCM16, IMU, GPS, commands, force_listen"},
+    {"from": "web_server", "to": "voice_pipeline", "payload": "audio queue handle (400 deep, drop-oldest)"},
+    {"from": "voice_pipeline", "to": "llm_parser", "payload": "transcript + RobotState snapshot"},
+    {"from": "llm_parser", "to": "ollama", "via": "HTTP :11434", "payload": "prompt, format=json, temp 0.1, num_predict 300"},
+    {"from": "llm_parser", "to": "command_queue", "payload": "validated action tokens with correlation id"},
+    {"from": "command_queue", "to": "robot_comms", "payload": "command chars and timed sequences"},
+    {"from": "command_queue", "to": "robot_state", "payload": "mode and goto_target writes"},
+    {"from": "tts", "to": "flutter_app", "via": "SocketIO tts_audio", "payload": "WAV bytes", "when": "phone camera in use and phone connected"},
+    {"from": "tts", "to": "laptop speaker", "via": "aplay stdin", "payload": "WAV bytes", "when": "otherwise"},
+    {"from": "web_server", "to": "flutter_app", "via": "SocketIO state_update", "payload": "RobotState snapshot", "rate": "100 ms"},
+    {"from": "web_server", "to": "flutter_app", "via": "HTTP /frame", "payload": "MJPEG", "rate": "~15 fps"}
+  ],
+
+  "security": {
+    "controls": [
+      {"id": "secrets-in-env", "control": "JARVIS_SECRET_KEY and all paths come from .env, which is git-ignored. Nothing is hardcoded in Python.", "status": "enforced"},
+      {"id": "fail-closed-auth", "control": "A missing secret returns 503 and stops the web server from starting. Absence of config is never treated as permission.", "status": "enforced", "file": "web_server.py"},
+      {"id": "constant-time-compare", "control": "hmac.compare_digest on every bearer and handshake token check.", "status": "enforced"},
+      {"id": "llm-output-validation", "control": "Pydantic discriminated union validates every model action before execution; failures drop actions and keep speech only.", "status": "enforced"},
+      {"id": "command-allowlist", "control": "Socket boundary accepts only FBLRSGOUD; the board also stops on any unknown byte.", "status": "enforced, defence in depth"},
+      {"id": "duration-clamp", "control": "Move duration clamped to [0.1, 5.0] s at both the queue and the web handler, so a model or a client cannot drive indefinitely.", "status": "enforced"},
+      {"id": "payload-caps", "control": "1 MB request body, 512 KB audio frame, 8 KB sensor JSON, bounded queues with drop-oldest.", "status": "enforced"},
+      {"id": "rate-limit", "control": "flask-limiter, 5 commands per second per address.", "status": "enforced"},
+      {"id": "cors-allowlist", "control": "Origins reflected only from ALLOWED_ORIGINS; SocketIO uses the same list.", "status": "enforced"},
+      {"id": "state-immutability", "control": "RLock plus copy.deepcopy on every dict getter and on snapshot(); no mutable reference escapes.", "status": "enforced"},
+      {"id": "emergency-path", "control": "Emergency keywords (stop, halt, freeze, abort, emergency, cancel) short-circuit before the LLM, clear the queue and force IDLE.", "status": "enforced"}
+    ],
+    "findings": [
+      {
+        "severity": "high",
+        "id": "esp32-hardcoded-credentials",
+        "where": "backend/esp32/main/main.c lines 22-24",
+        "detail": "Wi-Fi SSID, Wi-Fi password and the brain server IP are hardcoded as string literals in a tracked source file. The credentials are in git history.",
+        "fix": "Move them to sdkconfig / Kconfig or NVS provisioning and rotate the Wi-Fi password."
+      },
+      {
+        "severity": "medium",
+        "id": "esp32-link-unauthenticated",
+        "where": "backend/esp32/robot_comms.py",
+        "detail": "The motor TCP port accepts the first client that connects, with no authentication. Anyone on the LAN can drive the robot.",
+        "fix": "Pre-shared key handshake on accept, or bind to a dedicated interface."
+      },
+      {
+        "severity": "low",
+        "id": "stale-dependency",
+        "where": "pyproject.toml",
+        "detail": "pvporcupine is still declared and documented, but the live wake word engine is openWakeWord.",
+        "fix": "Drop pvporcupine and correct the README and CLAUDE.md."
+      }
+    ]
+  },
+
+  "configuration": {
+    "required": [
+      {"var": "JARVIS_SECRET_KEY", "purpose": "bearer token for REST and the SocketIO handshake", "failure": "ConfigError at startup, 503 at runtime"}
+    ],
+    "voice": [
+      {"var": "JARVIS_VOICE", "default": "1"},
+      {"var": "JARVIS_PIPER_BIN", "validated": "must exist and be executable when voice is enabled"},
+      {"var": "JARVIS_PIPER_MODEL", "validated": "must exist"},
+      {"var": "JARVIS_PIPER_CONFIG", "validated": "must exist"},
+      {"var": "JARVIS_WHISPER_MODEL", "default": "small.en"},
+      {"var": "JARVIS_WHISPER_DEVICE", "default": "cpu"}
+    ],
+    "llm": [
+      {"var": "JARVIS_OLLAMA_URL", "default": "http://localhost:11434"},
+      {"var": "JARVIS_OLLAMA_MODEL", "default": "gemma4-e2b-nothink:latest"},
+      {"var": "JARVIS_OLLAMA_TIMEOUT_S", "default": "5.0"},
+      {"var": "JARVIS_OLLAMA_MAX_RETRIES", "default": "1"},
+      {"var": "JARVIS_OLLAMA_BACKOFF_BASE", "default": "1.5"}
+    ],
+    "hardware_and_limits": [
+      {"var": "JARVIS_ESP32_HOST", "default": "0.0.0.0"},
+      {"var": "JARVIS_ESP32_PORT", "default": "9999"},
+      {"var": "JARVIS_ESP32_RECONNECT_BASE_S", "default": "1.0"},
+      {"var": "JARVIS_ESP32_RECONNECT_MAX_S", "default": "30.0"},
+      {"var": "JARVIS_CMD_QUEUE_MAX", "default": "128"},
+      {"var": "JARVIS_MOVE_MAX_DURATION_S", "default": "5.0"},
+      {"var": "JARVIS_MAX_AUDIO_PAYLOAD_BYTES", "default": "512000"},
+      {"var": "JARVIS_MAX_SENSOR_PAYLOAD_BYTES", "default": "8192"},
+      {"var": "JARVIS_ALLOWED_ORIGINS", "default": "localhost and LAN dev origins"}
+    ],
+    "logging": [
+      {"var": "JARVIS_LOG_DIR", "default": "~/.jarvis/logs", "note": "created if missing"},
+      {"var": "JARVIS_LOG_LEVEL", "default": "INFO"},
+      {"var": "JARVIS_LOG_MAX_BYTES", "default": "10485760"},
+      {"var": "JARVIS_LOG_BACKUPS", "default": "5"}
+    ]
+  },
+
+  "failure_modes": [
+    {"failure": "Camera absent or unreadable", "handling": "CameraUnavailable caught, mode forced IDLE, voice and manual control keep working", "blast_radius": "vision only"},
+    {"failure": "ESP32 not connected", "handling": "send() returns False, background reconnect with jittered backoff up to 30 s; the CV loop never blocks", "blast_radius": "motion only"},
+    {"failure": "ESP32 link drops mid-run", "handling": "Board sees recv <= 0 and stops the motors before reconnecting; the laptop clears the client and schedules reconnect", "blast_radius": "motion stops, safe"},
+    {"failure": "Ollama down or slow", "handling": "Retry with backoff, then a safe fallback response with zero actions; startup health check warns but does not abort", "blast_radius": "reasoning only, robot stays still"},
+    {"failure": "Model emits malformed or hostile JSON", "handling": "Pydantic rejects it, actions are dropped, only speech survives", "blast_radius": "none"},
+    {"failure": "A supervised thread crashes", "handling": "ThreadSupervisor restarts it, up to 10 times in 60 s, then marks it degraded", "blast_radius": "one subsystem"},
+    {"failure": "Command queue floods", "handling": "Bounded at 128 with drop-oldest and a loud log line", "blast_radius": "oldest actions lost, no memory growth"},
+    {"failure": "Phone audio floods", "handling": "Queue bounded at 400 chunks, drop-oldest, oversize frames rejected with audio_error", "blast_radius": "latency held flat"},
+    {"failure": "No GUI backend for cv2.imshow", "handling": "Falls back to a pygame preview window", "blast_radius": "display only"},
+    {"failure": "Process shutdown", "handling": "finally block sends S, releases the camera, stops the supervisor, closes sockets, terminates TTS subprocesses", "blast_radius": "none"}
+  ],
+
+  "testing": {
+    "framework": "pytest with coverage gate --cov-fail-under=35",
+    "total_test_functions": 91,
+    "suites": [
+      {"path": "tests/unit", "count": 18, "covers": "RobotState locking, RobotComms translation and allow-list, utils"},
+      {"path": "tests/integration", "count": 12, "covers": "web server routes, auth, payload handling"},
+      {"path": "tests/e2e", "count": 27, "covers": "application workflows, system integration, security"},
+      {"path": "tests/test_resilience", "count": 34, "covers": "ESP32 disconnect, Ollama retry, payload bombs, queue exhaustion, missing devices, thread supervisor, logging setup"}
+    ]
+  },
+
+  "deployment": {
+    "backend": "uv sync, then uv run python -m backend.main. Dev flags: --no-socket, --no-web, --laptop, --no-wake-word (spacebar PTT).",
+    "camera_aliases": {"laptop": 0, "mobile": "/dev/video2", "phone": "/dev/video2"},
+    "phone_camera": "scrcpy --video-source=camera --camera-facing=back --v4l2-sink=/dev/video2 --no-audio --max-fps 30",
+    "mobile_app": "cd jarvis_app && flutter pub get && flutter build apk --debug",
+    "firmware": "cd backend/esp32 && idf.py set-target esp32 && idf.py flash monitor",
+    "containers": "Dockerfile and docker-compose.yml present at the repo root"
+  },
+
+  "known_gaps": [
+    "GOTO mode is accepted by the LLM schema, the queue and the web bridge, but the CV loop has no GOTO branch; it hits the unknown-mode guard and stops.",
+    "Arm commands G/O/U/D pass the socket allow-list but main.c has no arm handling; the board treats them as unknown and stops.",
+    "HybridLineFollower is ML-only. The OpenCV fallback the name implies is commented out, so a failed model load means LOST rather than degraded steering.",
+    "tracker.py hardcodes an absolute local path for the line classifier weights.",
+    "POST /api/llm/query is a 501 stub.",
+    "WebServer.update_conversation is a no-op kept only for compatibility.",
+    "Documentation drift: Porcupine vs openWakeWord, and the README shows a 300 ms state broadcast where the code ticks at 100 ms."
+  ]
+}

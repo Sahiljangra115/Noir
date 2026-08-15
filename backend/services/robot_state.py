@@ -16,10 +16,12 @@ class RobotState:
 
     Attributes
     ----------
-    mode        : current operating mode (str)
-                  "IDLE" | "LFR" | "HUMAN" | "VLA" | "MANUAL" | "GOTO"
+    mode        : current operating mode (str). Exactly the values the CV loop
+                  in backend/main.py dispatches on:
+                  "IDLE" | "LFR" | "HUMAN_TRACK" | "VLA" | "MANUAL"
     last_cmd    : last single-char command sent to ESP32 (str)
-    goto_target : object label for GOTO mode (str | None)
+    goto_target : reserved; always None. Kept in the snapshot so the Flutter
+                  state contract does not change, but no mode consumes it.
     yolo_info   : latest YOLO detections as a human-readable string,
                   injected by the CV loop every frame and read by the LLM
                   to give it visual context.

@@ -3,6 +3,7 @@
 #include <stdint.h>
 #include <stdio.h>
 #include <string.h>
+#include <sys/time.h>
 
 #include "driver/gpio.h"
 #include "driver/ledc.h"
@@ -16,13 +17,21 @@
 #include "lwip/sockets.h"
 #include "nvs_flash.h"
 
+// Credentials live in main/secrets.h, which is gitignored.
+// Copy main/secrets.h.example to main/secrets.h and fill it in before flashing.
+#include "secrets.h"
+
 static const char *TAG = "esp32_controller";
 
-// Update these before flashing.
-static const char *WIFI_SSID = "16x2=8";
-static const char *WIFI_PASS = "Sahil#115";
-static const char *SERVER_IP = "192.168.202.124";
-static const uint16_t SERVER_PORT = 9999;
+static const char *WIFI_SSID = WIFI_SSID_STR;
+static const char *WIFI_PASS = WIFI_PASS_STR;
+static const char *SERVER_IP = SERVER_IP_STR;
+static const uint16_t SERVER_PORT = SERVER_PORT_NUM;
+
+// Failsafe: if no command arrives within this window the link is treated as
+// dead and the motors are cut. Without it a crashed laptop leaves the robot
+// driving at its last command until the battery dies.
+#define LINK_TIMEOUT_S 2
 
 // L298N pins
 #define PIN_ENA GPIO_NUM_25
@@ -187,6 +196,10 @@ static int connect_server(void) {
         return -1;
     }
 
+    // Bound recv() so a silently-dead link cannot leave the motors running.
+    struct timeval rcv_timeout = {.tv_sec = LINK_TIMEOUT_S, .tv_usec = 0};
+    setsockopt(sock, SOL_SOCKET, SO_RCVTIMEO, &rcv_timeout, sizeof(rcv_timeout));
+
     ESP_LOGI(TAG, "Connected to brain server");
     return sock;
 }
@@ -213,6 +226,14 @@ void app_main(void) {
         while (1) {
             char cmd = 0;
             int n = recv(sock, &cmd, 1, 0);
+            if (n < 0 && (errno == EAGAIN || errno == EWOULDBLOCK)) {
+                // Link idle past the failsafe window: cut motors, keep the
+                // socket. The brain de-duplicates commands, so it will not
+                // resend the current one; a stopped robot is the safe state.
+                ESP_LOGW(TAG, "No command for %ds, failsafe stop", LINK_TIMEOUT_S);
+                motor_stop();
+                continue;
+            }
             if (n <= 0) {
                 ESP_LOGW(TAG, "Socket disconnected (n=%d, errno=%d)", n, errno);
                 close(sock);

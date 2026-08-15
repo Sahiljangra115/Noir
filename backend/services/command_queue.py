@@ -12,8 +12,12 @@ Action types handled
 ────────────────────
   mode   → set robot_state.mode
   move   → send raw char for N seconds, then send 'S'
-  goto   → set mode=GOTO + target label (CV loop navigates)
-  arm    → send arm char command (G/O/U/D) to ESP32
+
+``goto`` and ``arm`` used to live here too. Neither had an executor behind it:
+``goto`` set a mode the CV loop does not dispatch on (so every frame logged
+"Unknown mode" and stopped), and ``arm`` pushed characters the ESP32 firmware
+treats as unknown and answers with a motor halt. Both are gone from the LLM
+schema as well — see backend/services/llm_parser.py.
 """
 
 import logging
@@ -25,13 +29,9 @@ from backend.config import config
 
 log = logging.getLogger(__name__)
 
-# Arm command → single-char ESP32 code
-_ARM_MAP: dict[str, str] = {
-    "GRAB":    "G",
-    "RELEASE": "O",
-    "UP":      "U",
-    "DOWN":    "D",
-}
+# Modes the CV loop in backend/main.py dispatches on. A mode action naming
+# anything else is rejected rather than parked in an unhandled state.
+_VALID_MODES = frozenset({"LFR", "HUMAN_TRACK", "VLA", "MANUAL", "IDLE"})
 
 
 class CommandQueue:
@@ -142,6 +142,10 @@ class CommandQueue:
         # ── mode change ───────────────────────────────────────────────────────
         if kind == "mode":
             value = action.get("value", "IDLE").upper()
+            if value not in _VALID_MODES:
+                log.warning("[QUEUE] Rejected unknown mode %r; staying in %s",
+                            value, self._state.mode)
+                return
             self._state.mode = value
             log.info("[QUEUE] Mode → %s", value)
 
@@ -153,32 +157,21 @@ class CommandQueue:
 
             prev_mode = self._state.mode
             self._state.mode = "MANUAL"     # freeze CV loop during timed move
+            # The CV loop drives last_cmd while in MANUAL, so it has to agree
+            # with what we just put on the wire or the next frame reverts it.
+            self._state.last_cmd = cmd
 
             self._comms.send(cmd)
             log.info("[QUEUE] Moving %s for %.1fs", cmd, duration)
             time.sleep(duration)
             self._comms.send("S")           # stop after timed move
+            self._state.last_cmd = "S"
 
-            # Restore the mode that was active before unless it was also MANUAL
-            if prev_mode != "MANUAL":
+            # Restore the pre-move mode, but only if nothing else claimed the
+            # robot while we were sleeping. An emergency stop sets IDLE mid-move
+            # and must not be undone by a stale restore.
+            if self._state.mode == "MANUAL" and prev_mode != "MANUAL":
                 self._state.mode = prev_mode
-
-        # ── goal navigation ───────────────────────────────────────────────────
-        elif kind == "goto":
-            target = action.get("target", "object")
-            self._state.goto_target = target
-            self._state.mode = "GOTO"
-            log.info("[QUEUE] GOTO → '%s'  (CV loop navigates)", target)
-            # The CV loop handles the actual driving; queue doesn't block here.
-            # When the CV loop signals arrival it will set mode back to IDLE.
-
-        # ── arm control ───────────────────────────────────────────────────────
-        elif kind == "arm":
-            cmd_str = action.get("cmd", "RELEASE").upper()
-            char    = _ARM_MAP.get(cmd_str, "O")
-            self._comms.send(char)
-            log.info("[QUEUE] Arm → %s (%s)", cmd_str, char)
-            time.sleep(1.5)    # allow servo time to move
 
         else:
             log.warning("[QUEUE] Unknown action type: %s", kind)

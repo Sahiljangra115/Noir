@@ -12,9 +12,10 @@ parses the reply into a structured JSON object containing:
 Action token catalogue
 ──────────────────────
 Mode changes:
-    {"type": "mode",  "value": "LFR"}          ← follow a line
-    {"type": "mode",  "value": "HUMAN"}         ← follow a person
+    {"type": "mode",  "value": "LFR"}           ← follow a line
+    {"type": "mode",  "value": "HUMAN_TRACK"}   ← follow a person
     {"type": "mode",  "value": "VLA"}           ← autonomous AI vision
+    {"type": "mode",  "value": "MANUAL"}        ← hold last command
     {"type": "mode",  "value": "IDLE"}          ← stop
 
 Timed movement:
@@ -23,14 +24,11 @@ Timed movement:
     {"type": "move",  "cmd": "L", "duration": 1.5}   ← turn left 1.5 s
     {"type": "move",  "cmd": "R", "duration": 1.5}   ← turn right 1.5 s
 
-Goal navigation:
-    {"type": "goto",  "target": "red box"}            ← navigate to object
-
-Arm control (requires physical arm on ESP32):
-    {"type": "arm",   "cmd": "GRAB"}
-    {"type": "arm",   "cmd": "RELEASE"}
-    {"type": "arm",   "cmd": "UP"}
-    {"type": "arm",   "cmd": "DOWN"}
+This catalogue is the whole vocabulary. ``goto`` and ``arm`` tokens used to be
+accepted here, but no CV mode navigates to a target and the ESP32 firmware has
+no arm: both ended up parking the robot in a mode the CV loop does not
+recognise. They were removed rather than left as schema that lies about the
+hardware. Re-add them alongside the code that executes them, not before.
 """
 
 import json
@@ -56,7 +54,7 @@ def _post_with_retry(url: str, *, json: dict, timeout: float, retries: int, base
     last_exc: Exception | None = None
     for attempt in range(retries + 1):
         try:
-            return requests.post(url, json=json, timeout=timeout)
+            resp = requests.post(url, json=json, timeout=timeout)
         except (requests.Timeout, requests.ConnectionError) as exc:
             last_exc = exc
             if attempt == retries:
@@ -64,38 +62,40 @@ def _post_with_retry(url: str, *, json: dict, timeout: float, retries: int, base
             delay = base * (2 ** attempt) + random.uniform(0, base)
             log.warning("[LLM] retry %d/%d after %.2fs: %s", attempt + 1, retries, delay, exc)
             time.sleep(delay)
-        except requests.HTTPError as exc:
-            if 500 <= exc.response.status_code < 600 and attempt < retries:
-                delay = base * (2 ** attempt) + random.uniform(0, base)
-                log.warning("[LLM] retry on 5xx after %.2fs", delay)
-                time.sleep(delay)
-                continue
-            raise
+            continue
+
+        # requests.post itself never raises on a 5xx, so the status has to be
+        # inspected here for the documented server-error retry to happen at all.
+        if 500 <= resp.status_code < 600 and attempt < retries:
+            delay = base * (2 ** attempt) + random.uniform(0, base)
+            log.warning("[LLM] retry on HTTP %d after %.2fs", resp.status_code, delay)
+            time.sleep(delay)
+            continue
+        return resp
+
     assert last_exc is not None
     raise last_exc
 
 # ── Action Models ─────────────────────────────────────────────────────────────
 
+# Only modes the CV loop in backend/main.py actually dispatches on.
+VALID_MODES = ("LFR", "HUMAN_TRACK", "VLA", "MANUAL", "IDLE")
+
 class ModeAction(BaseModel):
     type: Literal["mode"]
-    value: Literal["LFR", "HUMAN_TRACK", "VLA", "GOTO", "MANUAL", "IDLE"]
+    value: Literal["LFR", "HUMAN_TRACK", "VLA", "MANUAL", "IDLE"]
 
 class MoveAction(BaseModel):
     type: Literal["move"]
     cmd: Literal["F", "B", "L", "R", "S"]
-    duration: float = Field(default=1.0, ge=0.1, le=30.0)
-
-class GotoAction(BaseModel):
-    type: Literal["goto"]
-    target: str
-
-class ArmAction(BaseModel):
-    type: Literal["arm"]
-    cmd: Literal["GRAB", "RELEASE", "UP", "DOWN"]
+    # Upper bound mirrors config.MOVE_MAX_DURATION_S, which the executor also
+    # clamps to. Keeping them aligned stops the schema advertising a range the
+    # command queue will silently cut down.
+    duration: float = Field(default=1.0, ge=0.1, le=config.MOVE_MAX_DURATION_S)
 
 # Discriminated union for automatic sub-model selection
 RobotAction = Annotated[
-    Union[ModeAction, MoveAction, GotoAction, ArmAction],
+    Union[ModeAction, MoveAction],
     Field(discriminator="type")
 ]
 
@@ -108,23 +108,48 @@ class LLMResponse(BaseModel):
 # documented Gemma 4 model / local Ollama if env is unset.
 _OLLAMA_URL    = config.OLLAMA_URL.rstrip("/") + "/api/generate"
 _DEFAULT_MODEL = config.OLLAMA_MODEL          # gemma4-e2b-nothink:latest
-_TIMEOUT_S     = 20          # s – give it more time for structured output
 
 
 # ── System prompt ─────────────────────────────────────────────────────────────
-# Injected once per request.  {state} is replaced at call time.
+# Injected once per request. The placeholders are replaced at call time.
+#
+# The action catalogue has to be spelled out here. Without it the model has no
+# way to know the token shape and answers every "drive forward" with speech and
+# an empty actions list, which looks like the robot ignoring voice commands.
 _SYSTEM_PROMPT = """\
-You are jarvis — an AI assistant for a wheeled robot.
+You are jarvis — an AI assistant controlling a wheeled robot.
 Current Mode: {mode}
 Last Command: {last_cmd}
 Vision Context: {yolo_info}
 
-IMPORTANT: DO NOT include any thinking process or reasoning out loud.
+Reply with ONLY a raw JSON object — no markdown, no preamble, no reasoning:
+{"speech": "one short spoken sentence", "actions": [ ... ]}
 
-Respond with ONLY a raw JSON object — no markdown, no preamble.
+"actions" is a list. Leave it empty for conversation. When the user asks the
+robot to do something physical, put one or more of these tokens in it:
 
-Respond with ONLY a JSON object in this format:
-{"speech": "put your response text here", "actions": []}"""
+  {"type": "move", "cmd": "F", "duration": 2.0}
+      Drive for a fixed time. cmd is F (forward), B (backward),
+      L (turn left), R (turn right) or S (stop).
+      duration is seconds, between 0.1 and MAX_DURATION.
+
+  {"type": "mode", "value": "LFR"}
+      Switch behaviour. value is one of:
+        LFR          follow a line on the floor
+        HUMAN_TRACK  follow the nearest person
+        VLA          drive autonomously from camera vision
+        MANUAL       hold the last command
+        IDLE         stop and stand by
+
+Examples:
+  "go forward for three seconds" ->
+    {"speech": "Moving forward.", "actions": [{"type": "move", "cmd": "F", "duration": 3.0}]}
+  "follow me" ->
+    {"speech": "Following you.", "actions": [{"type": "mode", "value": "HUMAN_TRACK"}]}
+  "what can you see" ->
+    {"speech": "A person straight ahead.", "actions": []}
+
+Use no other action types and no other field names."""
 
 
 # Keywords that should NEVER reach the LLM (handled by fast path in pipeline)
@@ -156,6 +181,7 @@ class LLMParser:
             .replace("{mode}",      state_snapshot.get("mode",      "IDLE"))
             .replace("{last_cmd}",  state_snapshot.get("last_cmd",  "S"))
             .replace("{yolo_info}", state_snapshot.get("yolo_info", "no detections"))
+            .replace("MAX_DURATION", f"{config.MOVE_MAX_DURATION_S:g}")
         ) + f'\n\nUser said: "{text}"'
 
         payload = {
@@ -163,7 +189,7 @@ class LLMParser:
             "prompt": prompt,
             "format": "json",        # Ollama forces JSON output
             "stream": False,
-            "include_thinking": False,  # Disable reasoning
+            "think": False,          # Ollama's flag for suppressing reasoning output
             "options": {
                 "temperature": 0.1,  # low temp → deterministic structured output
                 "num_predict": 300,
@@ -189,7 +215,7 @@ class LLMParser:
                 raw = full_data.get("thinking", "").strip()
             
         except requests.exceptions.Timeout:
-            log.warning("[LLM] Timeout after %ds", _TIMEOUT_S)
+            log.warning("[LLM] Timeout after %.1fs", config.OLLAMA_TIMEOUT_S)
             return self._fallback("Sorry, I timed out processing that.")
         except Exception as exc:
             log.error("[LLM] Request error: %s", exc)

@@ -31,4 +31,5 @@ class AppConfig {
   static const evSensorData = 'sensor_data';
   static const evCommand = 'command';
   static const evForceListen = 'force_listen';
+  static const evTtsAudio = 'tts_audio'; // laptop -> phone, raw WAV bytes
 }

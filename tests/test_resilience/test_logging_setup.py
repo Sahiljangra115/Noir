@@ -1,6 +1,7 @@
 """Tests for structured logging and correlation ID propagation."""
 import json
 import logging
+import threading
 import pytest
 from backend.services.logging_setup import corr_id_var, set_corr_id
 
@@ -14,7 +15,23 @@ def test_set_corr_id_sets_contextvar():
 
 @pytest.mark.unit
 def test_corr_id_defaults_to_empty():
-    assert corr_id_var.get("") == ""
+    """In a context that never set it, corr_id reads as the empty default.
+
+    Asserted from a fresh thread: a new thread starts with an empty
+    contextvars Context, so this is independent of anything an earlier test
+    (or the voice pipeline, which sets corr_id per cycle without resetting)
+    left behind in the main thread's context.
+    """
+    observed: list[str] = []
+
+    def _read():
+        observed.append(corr_id_var.get())
+
+    thread = threading.Thread(target=_read)
+    thread.start()
+    thread.join(timeout=5.0)
+
+    assert observed == [""]
 
 
 @pytest.mark.unit

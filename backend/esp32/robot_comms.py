@@ -34,7 +34,7 @@ log = logging.getLogger(__name__)
 
 # ── Intent / steer → single-char command maps ─────────────────────────────────
 
-# VLA high-level intents (from Moondream)
+# VLA high-level intents (tracker/vision_processor may emit these)
 INTENT_MAP: dict[str, str] = {
     "FOLLOW": "F",
     "SEARCH": "R",   # rotate in place to scan the room
@@ -42,7 +42,7 @@ INTENT_MAP: dict[str, str] = {
     "AVOID":  "B",   # back away from obstacle
 }
 
-# LFR steer strings (from tracker.LineFollower)
+# LFR steer strings (from tracker.HybridLineFollower.scan)
 LFR_MAP: dict[str, str] = {
     "STRAIGHT": "F",
     "LEFT":     "L",
@@ -58,6 +58,17 @@ _ANGLE_DEADZONE = 5.0    # degrees – ignore tiny rotation jitter
 # Socket timeout settings for non-blocking operations
 _SOCKET_TIMEOUT_S = 0.1   # 100ms timeout for socket operations
 _SEND_TIMEOUT_S = 0.05    # 50ms timeout for send operations
+
+# Duplicate commands are suppressed to keep the link quiet, but not forever:
+# the ESP32 arms a LINK_TIMEOUT_S failsafe that cuts the motors when nothing
+# arrives. Re-sending the unchanged command at this interval keeps a steady
+# drive alive while still tripping the failsafe if the brain dies.
+# Must stay well below LINK_TIMEOUT_S in backend/esp32/main/main.c (2 s).
+_KEEPALIVE_S = 0.5
+
+# Poll interval used while the listening socket cannot be bound (e.g. the port
+# is still held by a previous run). Without it the accept loop spins at 100% CPU.
+_BIND_RETRY_S = 1.0
 
 
 class RobotComms:
@@ -83,6 +94,7 @@ class RobotComms:
         self._server: Optional[socket.socket]  = None
         self._client: Optional[socket.socket]  = None
         self._last_cmd: str = ""
+        self._last_sent_at: float = 0.0
 
         # Reconnect supervision
         self._stop_event: threading.Event = threading.Event()
@@ -114,10 +126,11 @@ class RobotComms:
         while not self._stop_event.is_set():
             if self._attempt_connect():
                 return
-            # _attempt_connect already polls with timeout, so loop tight only
-            # while the listening socket exists.
+            # _attempt_connect polls the listening socket with its own timeout,
+            # so the loop is already paced while bound. When the bind itself
+            # failed there is no socket to poll, so back off explicitly.
             if self._server is None:
-                self._ensure_server_bound()
+                self._stop_event.wait(_BIND_RETRY_S)
 
     def _ensure_server_bound(self) -> None:
         """Bind/re-bind the listening socket if not already bound."""
@@ -152,6 +165,11 @@ class RobotComms:
         client.settimeout(_SEND_TIMEOUT_S)
         self._client = client
         self._reconnect_attempt = 0
+        # A reconnected ESP32 has rebooted into a stopped state and remembers
+        # nothing. Clearing the dedupe marker makes the next command — even if
+        # identical to the pre-disconnect one — actually go out on the wire.
+        self._last_cmd = ""
+        self._last_sent_at = 0.0
         log.info("[COMMS] ESP32 connected from %s", addr)
         print(f"[COMMS] ESP32 connected from {addr}")
         return True
@@ -199,6 +217,7 @@ class RobotComms:
 
     def close(self) -> None:
         """Gracefully close both server and client sockets."""
+        had_socket = self._client is not None or self._server is not None
         for sock in (self._client, self._server):
             if sock:
                 try:
@@ -206,20 +225,25 @@ class RobotComms:
                 except OSError:
                     pass
         self._client = self._server = None
-        print("[COMMS] Sockets closed.")
+        self._last_cmd = ""
+        self._last_sent_at = 0.0
+        if had_socket:
+            log.info("[COMMS] Sockets closed.")
 
     # ── Command sending ───────────────────────────────────────────────────────
 
-    # Allow-list at the socket boundary. Motor {F,B,L,R,S} per the security
-    # rule, plus arm codes {G,O,U,D} (command_queue._ARM_MAP) that the system
-    # already emits. Anything else is dropped before it reaches the ESP32.
-    _ALLOWED_CMDS = frozenset("FBLRSGOUD")
+    # Allow-list at the socket boundary: the five motor commands the firmware
+    # in backend/esp32/main/main.c actually implements. Anything else would hit
+    # the firmware's `default:` branch and halt the motors, so it is dropped here.
+    _ALLOWED_CMDS = frozenset("FBLRS")
 
     def send(self, cmd: str, *, corr_id: str = "") -> bool:
         """
         Send a single-character command to the ESP32.
         Returns True on success. Uses non-blocking I/O with timeout to prevent
-        CV loop blocking. Silently drops duplicate commands to reduce noise.
+        CV loop blocking. Duplicate commands are suppressed for up to
+        ``_KEEPALIVE_S`` and then re-sent, so the firmware's link failsafe sees
+        a live brain without the CV loop flooding the socket at 20 Hz.
         """
         # Input validation
         if not cmd or not isinstance(cmd, str):
@@ -240,7 +264,8 @@ class RobotComms:
             log.warning("[COMMS] Rejected command not in allow-list: %r", cmd)
             return False
 
-        if cmd == self._last_cmd:
+        now = time.monotonic()
+        if cmd == self._last_cmd and (now - self._last_sent_at) < _KEEPALIVE_S:
             return True               # de-duplicate; ESP32 keeps last command
 
         try:
@@ -256,6 +281,7 @@ class RobotComms:
             if writable:
                 self._client.sendall(cmd.encode("utf-8"))
                 self._last_cmd = cmd
+                self._last_sent_at = now
                 if corr_id:
                     log.info("[COMMS] Sent %r  corr_id=%s", cmd, corr_id)
                 return True
