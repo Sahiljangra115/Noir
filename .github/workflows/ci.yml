@@ -1,0 +1,27 @@
+name: CI
+
+on:
+  push:
+    branches: [ main ]
+  pull_request:
+    branches: [ main ]
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Install system dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y portaudio19-dev libgl1-mesa-glx
+      - name: Install test dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install pytest pytest-cov numpy opencv-python-headless pydantic requests python-dotenv flask flask-socketio simple-websocket
+      - name: Run unit & resilience tests
+        run: |
+          pytest tests/unit tests/test_resilience -v --no-cov

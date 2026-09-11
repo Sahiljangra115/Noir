@@ -8,6 +8,7 @@
 [![Flutter](https://img.shields.io/badge/Flutter-Material%203-02569B?logo=flutter&logoColor=white)](https://flutter.dev/)
 [![ESP-IDF](https://img.shields.io/badge/ESP--IDF-v6-E7352C?logo=espressif&logoColor=white)](https://docs.espressif.com/)
 [![Status](https://img.shields.io/badge/status-v0.4.0-success)]()
+[![CI](https://github.com/Sahiljangra115/Noir/actions/workflows/ci.yml/badge.svg)](https://github.com/Sahiljangra115/Noir/actions/workflows/ci.yml)
 
 </div>
 
